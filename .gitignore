@@ -1,2 +1,15 @@
 .env
 storage
+core/db/__pycache__/verify_sql.cpython-312.pyc
+core/db/__pycache__/query_engine.cpython-312.pyc
+core/db/__pycache__/introspector.cpython-312.pyc
+core/db/__pycache__/embedder.cpython-312.pyc
+core/charts/__pycache__/spec_generator.cpython-312.pyc
+core/db/__pycache__/__init__.cpython-312.pyc
+core/charts/__pycache__/__init__.cpython-312.pyc
+.idea/inspectionProfiles/profiles_settings.xml
+.idea/workspace.xml
+.idea/vcs.xml
+.idea/misc.xml
+.idea/langchain_sql_agent.iml
+.idea/workspace.xml
