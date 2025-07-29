@@ -13,9 +13,6 @@ from sqlalchemy.exc import OperationalError
 import logging
 import requests
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("health", __name__)

@@ -79,15 +79,18 @@ class DBEmbedder:
     def similarity_search(self, query: str, k: int = 6) -> List[Dict[str, Any]]:
         try:
             store = self.ensure_store()
-            # Use standard similarity_search method that all vector stores have
-            hits = store.similarity_search(query, k=k)  # [Document, ...]
+            if hasattr(store, "similarity_search_with_score"):
+                hits = store.similarity_search_with_score(query, k=k)
+            else:
+                hits = [(doc, 0.0) for doc in store.similarity_search(query, k=k)]
+
             return [
                 {
                     "table": doc.metadata["table"],
-                    "score": 0.0,  # Standard similarity_search doesn't return scores
+                    "score": score,
                     "text": doc.page_content,
                 }
-                for doc in hits
+                for doc, score in hits
             ]
         except Exception as e:
             logger.error(f"Error during similarity search: {e}")
@@ -95,14 +98,18 @@ class DBEmbedder:
             logger.info("Rebuilding index and trying again...")
             self.rebuild()
             store = self.ensure_store(force=True)
-            hits = store.similarity_search(query, k=k)
+            if hasattr(store, "similarity_search_with_score"):
+                hits = store.similarity_search_with_score(query, k=k)
+            else:
+                hits = [(doc, 0.0) for doc in store.similarity_search(query, k=k)]
+
             return [
                 {
                     "table": doc.metadata["table"],
-                    "score": 0.0,
+                    "score": score,
                     "text": doc.page_content,
                 }
-                for doc in hits
+                for doc, score in hits
             ]
 
     # ------------------------------------------------------------------ #

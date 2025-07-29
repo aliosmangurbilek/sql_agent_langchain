@@ -25,12 +25,8 @@ from functools import lru_cache
 
 from flask import Blueprint, jsonify, request
 from werkzeug.exceptions import BadRequest
-from dotenv import load_dotenv
 
 from core.db.query_engine import QueryEngine
-
-# Ensure environment variables are loaded
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("query", __name__, url_prefix="/api")

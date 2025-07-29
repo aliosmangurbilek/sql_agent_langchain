@@ -138,11 +138,11 @@ function handleQueryResponse(data) {
     }
 
     // Display SQL query
-    sqlOutput.textContent = data.sql_query || 'No SQL generated';
+    sqlOutput.textContent = data.sql || 'No SQL generated';
 
     // Display data results
-    if (data.result && data.result.length > 0) {
-        dataOutput.textContent = JSON.stringify(data.result, null, 2);
+    if (data.data && data.data.length > 0) {
+        dataOutput.textContent = JSON.stringify(data.data, null, 2);
     } else {
         dataOutput.textContent = 'No data returned';
     }
@@ -158,8 +158,8 @@ function handleChartResponse(data) {
     }
 
     // Display SQL query
-    if (data.sql_query) {
-        sqlOutput.textContent = data.sql_query;
+    if (data.sql) {
+        sqlOutput.textContent = data.sql;
     }
 
     // Display data results
@@ -233,7 +233,7 @@ function loadSampleQuestions() {
 // Health check function
 async function checkHealth() {
     try {
-        const response = await fetch('/api/health');
+        const response = await fetch('/healthz');
         const data = await response.json();
         console.log('Health check:', data);
         return data.status === 'healthy';
