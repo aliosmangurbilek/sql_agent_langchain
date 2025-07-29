@@ -1,7 +1,16 @@
 """
 flask_app.config
-~~~~~~~~~~~~~~~~
-Merkezî yapılandırma katmanı.
+~~~~~~~    # ---------------------------------------------------------- #
+    # Flask / genel
+    # ---------------------------------------------------------- #
+    FLASK_ENV: str = Field("development", env="FLASK_ENV")
+    FLASK_DEBUG: bool = Field(True, env="FLASK_DEBUG")
+
+    # ---------------------------------------------------------- #
+    # OpenRouter (Tek LLM Provider)
+    # ---------------------------------------------------------- #
+    OPENROUTER_API_KEY: str = Field("", env="OPENROUTER_API_KEY")
+    OPENROUTER_MODEL: str = Field("deepseek/deepseek-chat", env="OPENROUTER_MODEL")î yapılandırma katmanı.
 • .env (veya gerçek ortam değişkenleri) okunur
 • Pydantic BaseSettings → type-safe erişim
 • create_app() içinde   app.config.from_object(Settings())

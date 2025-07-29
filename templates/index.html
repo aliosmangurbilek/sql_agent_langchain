@@ -29,18 +29,12 @@
                 <div id="test-connection-result" class="connection-status"></div>
                 <div class="input-group">
                     <label for="model-select">Model:</label>
-                    <select id="model-select">
-                        <option value="gpt-4o-mini">OpenAI GPT-4o Mini (Default)</option>
-                        <option value="gpt-3.5-turbo">OpenAI GPT-3.5 Turbo</option>
-                        <option value="gpt-4">OpenAI GPT-4</option>
-                        <option value="gpt-4o">OpenAI GPT-4o</option>
-                        <option value="openrouter">OpenRouter - DeepSeek AI Qwen3 Coder (Free)</option>
-                        <option value="openrouter/anthropic/claude-3-haiku">OpenRouter - Claude 3 Haiku</option>
-                        <option value="openrouter/google/gemini-flash-1.5">OpenRouter - Gemini Flash 1.5</option>
-                        <option value="openrouter/meta-llama/llama-3.1-8b-instruct:free">OpenRouter - Llama 3.1 8B (Free)</option>
-                        <option value="openrouter/deepseek/deepseek-chat-v3-0324:free">OpenRouter - Llama 3.1 8B (Free)</option>
-
-                    </select>
+                    <div class="model-selection">
+                        <select id="model-select" disabled>
+                            <option value="">Loading models...</option>
+                        </select>
+                        <button id="refresh-models-btn" class="btn btn-refresh">🔄</button>
+                    </div>
                 </div>
             </section>
 
@@ -93,6 +87,78 @@
     </div>
 
     <script>
+        // Model loading functionality
+        async function loadModels() {
+            const modelSelect = document.getElementById('model-select');
+            const refreshBtn = document.getElementById('refresh-models-btn');
+            
+            // Disable during loading
+            modelSelect.disabled = true;
+            refreshBtn.disabled = true;
+            modelSelect.innerHTML = '<option value="">Loading models...</option>';
+            
+            try {
+                const response = await fetch('/api/models');
+                const result = await response.json();
+                
+                if (response.ok && result.status === 'success') {
+                    modelSelect.innerHTML = '';
+                    
+                    // Group models by type
+                    const freeModels = result.models.filter(m => m.is_free);
+                    const paidModels = result.models.filter(m => !m.is_free);
+                    
+                    // Add free models first
+                    if (freeModels.length > 0) {
+                        const freeGroup = document.createElement('optgroup');
+                        freeGroup.label = '🆓 Free Models';
+                        freeModels.forEach(model => {
+                            const option = document.createElement('option');
+                            option.value = model.id;
+                            option.textContent = `${model.name} (Free)`;
+                            if (model.description) {
+                                option.title = model.description;
+                            }
+                            freeGroup.appendChild(option);
+                        });
+                        modelSelect.appendChild(freeGroup);
+                    }
+                    
+                    // Add paid models
+                    if (paidModels.length > 0) {
+                        const paidGroup = document.createElement('optgroup');
+                        paidGroup.label = '💰 Paid Models';
+                        paidModels.forEach(model => {
+                            const option = document.createElement('option');
+                            option.value = model.id;
+                            option.textContent = `${model.name} ($${model.pricing.prompt}/1M tokens)`;
+                            if (model.description) {
+                                option.title = model.description;
+                            }
+                            paidGroup.appendChild(option);
+                        });
+                        modelSelect.appendChild(paidGroup);
+                    }
+                    
+                    // Select default model (first free model or deepseek/deepseek-chat)
+                    const defaultModel = freeModels.find(m => m.id.includes('deepseek')) || freeModels[0];
+                    if (defaultModel) {
+                        modelSelect.value = defaultModel.id;
+                    }
+                    
+                } else {
+                    modelSelect.innerHTML = '<option value="">Error loading models</option>';
+                    console.error('Failed to load models:', result.error);
+                }
+            } catch (error) {
+                modelSelect.innerHTML = '<option value="">Error loading models</option>';
+                console.error('Error loading models:', error);
+            } finally {
+                modelSelect.disabled = false;
+                refreshBtn.disabled = false;
+            }
+        }
+        
         // Test Connection functionality
         document.getElementById('test-connection-btn').addEventListener('click', async () => {
             const dbUri = document.getElementById('db-uri').value;
@@ -125,6 +191,12 @@
                 resultDiv.innerHTML = `<span class="error">❌ Error: ${error.message}</span>`;
             }
         });
+        
+        // Refresh models button
+        document.getElementById('refresh-models-btn').addEventListener('click', loadModels);
+        
+        // Load models when page loads
+        document.addEventListener('DOMContentLoaded', loadModels);
     </script>
 
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>

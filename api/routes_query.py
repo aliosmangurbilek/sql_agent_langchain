@@ -37,18 +37,13 @@ bp = Blueprint("query", __name__, url_prefix="/api")
 
 
 @lru_cache(maxsize=16)  # aynı db_uri ve model için QueryEngine nesnesini sakla
-def _get_engine(db_uri: str, llm_model: str = "gpt-4o-mini") -> QueryEngine:
+def _get_engine(db_uri: str, llm_model: str = "deepseek/deepseek-chat") -> QueryEngine:
     # Her db_uri ve llm_model kombinasyonu için bir kere QueryEngine oluştur
     # Bu sayede aynı veritabanı için birden fazla kez embedding yapmayız
     
-    # OpenRouter model için default değeri kullan
-    if llm_model == "openrouter":
-        # Model formatı: "openrouter/provider/model-name"
-        openrouter_model = os.getenv("OPENROUTER_MODEL", "openrouter/deepseek-chat-v3-0324:free")
-        logger.info(f"Using OpenRouter model: {openrouter_model}")
-        return QueryEngine(db_uri, llm_model=openrouter_model)
-    else:
-        return QueryEngine(db_uri, llm_model=llm_model)
+    # Direkt olarak model ID'sini kullan
+    logger.info(f"Using OpenRouter model: {llm_model}")
+    return QueryEngine(db_uri, llm_model=llm_model)
 
 
 @bp.post("/query")
@@ -60,7 +55,7 @@ def run_query():
     body = request.get_json(silent=True) or {}
     db_uri = body.get("db_uri")
     question = body.get("question")
-    model = body.get("model", "gpt-4o-mini")  # Default to gpt-4o-mini if not specified
+    model = body.get("model", "deepseek/deepseek-chat")  # Default to free DeepSeek model if not specified
 
     if not db_uri or not question:
         raise BadRequest("Both 'db_uri' and 'question' fields are required")

@@ -48,38 +48,29 @@ class QueryEngine:
     def __init__(
         self,
         db_uri: str,
-        llm_model: str = "gpt-4o-mini",
+        llm_model: str = "deepseek/deepseek-chat",
         top_k: int = 6,
     ) -> None:
         self.engine = sa.create_engine(db_uri)
         self.embedder = DBEmbedder(self.engine)  # otomatik embedding + metadata
         
-        # Model seçimi: OpenAI veya OpenRouter
-        if "/" in llm_model:  # OpenRouter model format: provider/model-name
-            provider, model = llm_model.split("/", 1)
-            if provider == "openrouter":
-                # OpenRouter API kullan - ChatOpenAI ile custom base_url kullanılır
-                openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
-                if not openrouter_api_key:
-                    raise ValueError("OPENROUTER_API_KEY not found in environment variables")
-                
-                # OpenRouter için doğru yapılandırma - client parametresi kullanmayın
-                self.llm = ChatOpenAI(
-                    api_key=openrouter_api_key,
-                    base_url="https://openrouter.ai/api/v1",
-                    model=model,
-                    temperature=0.0,
-                    default_headers={"HTTP-Referer": "https://github.com/openrouter-chat/openrouter-langchain"}
-                )
-                logger.info(f"Using OpenRouter with model: {model}")
-            else:
-                # OpenAI API kullan
-                self.llm = ChatOpenAI(model=llm_model, temperature=0.0)
-                logger.info(f"Using OpenAI model: {llm_model}")
-        else:
-            # Varsayılan olarak OpenAI
-            self.llm = ChatOpenAI(model=llm_model, temperature=0.0)
-            logger.info(f"Using default OpenAI model: {llm_model}")
+        # Sadece OpenRouter kullan
+        openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+        if not openrouter_api_key:
+            raise ValueError("OPENROUTER_API_KEY not found in environment variables")
+        
+        # OpenRouter için ChatOpenAI yapılandırması
+        self.llm = ChatOpenAI(
+            api_key=openrouter_api_key,
+            base_url="https://openrouter.ai/api/v1",
+            model=llm_model,
+            temperature=0.0,
+            default_headers={
+                "HTTP-Referer": "https://github.com/openrouter-chat/openrouter-langchain",
+                "X-Title": "LangChain SQL Agent"
+            }
+        )
+        logger.info(f"Using OpenRouter with model: {llm_model}")
         self.top_k = top_k
 
     # ------------------------------------------------------------------ #

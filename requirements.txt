@@ -8,7 +8,6 @@ langchain
 langchain-community
 langchain-openai
 langchain-huggingface
-openai
 
 # Database dependencies
 sqlalchemy
@@ -21,6 +20,7 @@ sentence-transformers
 pydantic
 pydantic-settings
 python-dotenv
+requests
 
 # Chart and data visualization dependencies
 vega-datasets
