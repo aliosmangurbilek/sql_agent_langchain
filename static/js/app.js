@@ -149,14 +149,11 @@ function handleQueryResponse(data) {
         return;
     }
 
-    // Display SQL query
-    sqlOutput.textContent = data.sql || 'No SQL generated';
-
-    // Display data results
-    if (data.data && data.data.length > 0) {
-        dataOutput.textContent = JSON.stringify(data.data, null, 2);
+    // Display agent answer
+    if (data.answer) {
+        sqlOutput.textContent = data.answer;
     } else {
-        dataOutput.textContent = 'No data returned';
+        sqlOutput.textContent = 'No answer returned';
     }
 
     // Switch to SQL tab to show results

@@ -1,29 +1,68 @@
-"""
-core.db.query_engine
-~~~~~~~~~~~~~~~~~~~~
+"""core.db.query_engine
+~~~~~~~~~~~~~~~~~~~~~~~
 
-• Kullanıcı cümlesini alır, şemadan k-adet ilgili tablo/kolonu DBEmbedder ile bulur.
-• Küçük şema kesitini LLM'e prompt eder → SQL sorgusu üretir.
-• verify_sql güvenliğinden geçirir, veritabanında yürütür, sonucu JSON olarak döndürür.
+LangChain tabanlı tam yetenekli bir SQL ajanı.
+
+Bu sürüm, LangChain'in ``SQLDatabaseToolkit`` ve ``create_sql_agent``
+yardımıyla veritabanıyla etkileşen bir ajan yaratır. Ajan gerekli
+olduğunda tablolari listeler, şemayı sorar ve sorguyu çalıştırır.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-from functools import lru_cache
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import os
 import sqlalchemy as sa
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_openai import ChatOpenAI
-
-from .embedder import DBEmbedder
-from .verify_sql import verify_sql
+from langchain_community.utilities.sql_database import SQLDatabase
+from langchain_community.utilities.sql_database import truncate_word
+from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
+from langchain_community.agent_toolkits.sql.base import create_sql_agent
 
 logger = logging.getLogger(__name__)
+
+
+class LoggingSQLDatabase(SQLDatabase):
+    """SQLDatabase genişletmesi; son çalıştırılan sorguyu saklar."""
+
+    def run(
+        self,
+        command: sa.sql.Executable | str,
+        fetch: str = "all",
+        include_columns: bool = False,
+        *,
+        parameters: Dict[str, Any] | None = None,
+        execution_options: Dict[str, Any] | None = None,
+    ) -> sa.engine.Result | str | list[Dict[str, Any]]:
+        self.last_query = str(command)
+        result = self._execute(
+            command,
+            fetch,
+            parameters=parameters,
+            execution_options=execution_options,
+        )
+        self.last_result = result
+
+        if fetch == "cursor":
+            return result
+
+        res = [
+            {
+                column: truncate_word(value, length=self._max_string_length)
+                for column, value in r.items()
+            }
+            for r in result
+        ]
+
+        if not include_columns:
+            res = [tuple(row.values()) for row in res]
+
+        if not res:
+            return ""
+        else:
+            return str(res)
 
 
 class QueryEngine:
@@ -36,26 +75,21 @@ class QueryEngine:
         SQLAlchemy tarafından desteklenen bir bağlantı URI'si
         (postgresql://, mysql://, sqlite:/// vs.).
     llm_model : str, optional
-        OpenAI modeli (varsayılan: "gpt-4o-mini").
-    top_k : int, optional
-        Embedding aramasında kaç tablo/kolon kesiti alınacağı.
+        OpenRouter üzerinden çağrılacak modelin adı.
     """
 
     def __init__(
         self,
         db_uri: str,
         llm_model: str = "deepseek/deepseek-chat",
-        top_k: int = 6,
     ) -> None:
         self.engine = sa.create_engine(db_uri)
-        self.embedder = DBEmbedder(self.engine)  # otomatik embedding + metadata
-        
-        # Sadece OpenRouter kullan
+
+        # OpenRouter için ChatOpenAI yapılandırması
         openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
         if not openrouter_api_key:
             raise ValueError("OPENROUTER_API_KEY not found in environment variables")
-        
-        # OpenRouter için ChatOpenAI yapılandırması
+
         self.llm = ChatOpenAI(
             api_key=openrouter_api_key,
             base_url="https://openrouter.ai/api/v1",
@@ -66,111 +100,26 @@ class QueryEngine:
                 "X-Title": "LangChain SQL Agent"
             }
         )
+
+        self.db = LoggingSQLDatabase(self.engine)
+        toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
+        self.agent = create_sql_agent(llm=self.llm, toolkit=toolkit, verbose=False)
+
         logger.info(f"Using OpenRouter with model: {llm_model}")
-        self.top_k = top_k
 
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
 
     def ask(self, nl_query: str) -> Dict[str, Any]:
-        """
-        Doğal dil sorgusunu al, SQL'e çevir, çalıştır, sonucu döndür.
+        """Doğal dil sorusunu LangChain SQL ajanına ilet."""
 
-        Returns
-        -------
-        dict
-            {"sql": <str>, "data": <list[dict]>, "rowcount": <int>}
-        """
-        relevant = self.embedder.similarity_search(nl_query, k=self.top_k)
-        schema_snippet = "\n".join(hit["text"] for hit in relevant)
-
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "You are an expert PostgreSQL assistant. "
-                    "Write only valid SELECT statements and always add LIMIT 1000 if not present.",
-                ),
-                (
-                    "user",
-                    (
-                        f"Database snippet:\n{schema_snippet}\n\n"
-                        f"Write a SQL query (PostgreSQL syntax) "
-                        f"for the following request:\n\"{nl_query}\""
-                    ),
-                ),
-            ]
-        )
-
-        sql = self._generate_sql(prompt)
-        logger.debug("Generated SQL: %s", sql)
-
-        verify_sql(sql, engine=self.engine)  # güvenlik kontrolleri
-
-        with self.engine.connect() as conn:
-            result = conn.execute(sa.text(sql))
-            rows = result.fetchall()
-            
-            # SQLAlchemy 2.0+ için uyumlu veri dönüşümü
-            if rows:
-                # Kolon isimlerini al
-                columns = list(result.keys())
-                # Her satırı dictionary'ye çevir
-                data = [dict(zip(columns, row)) for row in rows]
-            else:
-                data = []
+        result = self.agent.invoke({"input": nl_query})
+        answer = result.get("output", "") if isinstance(result, dict) else str(result)
 
         return {
-            "sql": sql,
-            "data": data,
-            "rowcount": len(rows),
+            "answer": answer,
+            "sql": getattr(self.db, "last_query", ""),
+            "data": getattr(self.db, "last_result", []),
         }
 
-    # ------------------------------------------------------------------ #
-    # Internal helpers
-    # ------------------------------------------------------------------ #
-
-    def _generate_sql(self, prompt: ChatPromptTemplate) -> str:
-        """LLM'den tek satır SQL döndürür, arakod veya yorum siler."""
-        # Deprecated __call__ yerine invoke kullan
-        try:
-            response = self.llm.invoke(prompt.format_messages())
-        except Exception as exc:  # noqa: BLE001
-            logger.error("LLM invocation failed: %s", exc)
-            raise RuntimeError(f"LLM invocation failed: {exc}") from exc
-
-        # ChatModel geri dönüşü AIMessage; content alanındaki metin
-        sql_text = response.content.strip()
-        
-        # ```sql ... ``` bloklarını temizle
-        if "```sql" in sql_text:
-            # ```sql ile başlayıp ``` ile biten blokları temizle
-            lines = sql_text.split('\n')
-            sql_lines = []
-            in_sql_block = False
-            
-            for line in lines:
-                if line.strip().startswith('```sql'):
-                    in_sql_block = True
-                    continue
-                elif line.strip() == '```' and in_sql_block:
-                    in_sql_block = False
-                    continue
-                elif in_sql_block:
-                    sql_lines.append(line)
-            
-            sql_text = '\n'.join(sql_lines).strip()
-        elif sql_text.startswith("```"):
-            # Genel kod bloklarını temizle
-            parts = sql_text.split("```")
-            if len(parts) >= 3:
-                sql_text = parts[1].strip()
-            else:
-                sql_text = sql_text.replace("```", "").strip()
-        
-        # SQL kelimesini temizle (başında kalmış olabilir)
-        if sql_text.lower().startswith('sql\n'):
-            sql_text = sql_text[4:].strip()
-        
-        return sql_text.strip(" ;\n")

@@ -11,9 +11,7 @@ Body (JSON):
 
 Response:
 {
-  "sql": "...",
-  "data": [ { ... }, ... ],
-  "rowcount": 42
+  "answer": "<natural language answer>"
 }
 """
 
