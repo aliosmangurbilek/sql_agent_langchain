@@ -1,6 +1,4 @@
-from dotenv import load_dotenv
-# Load environment variables first, before any other imports
-load_dotenv()
+import logging
 
 # Suppress TensorFlow and CUDA warnings
 import os
@@ -15,11 +13,17 @@ from api.routes_query import bp as query_bp
 from api.routes_chart import bp as chart_bp
 from api.routes_health import bp as health_bp
 from config import AppConfig
-import os
 
 def create_app() -> Flask:
     """Flask application factory"""
     app = Flask(__name__)
+
+    # Configure logging once
+    if not logging.getLogger().handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        )
 
     # Load configuration
     config = AppConfig()

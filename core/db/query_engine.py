@@ -19,13 +19,9 @@ import sqlalchemy as sa
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_openai import ChatOpenAI
-from dotenv import load_dotenv
 
 from .embedder import DBEmbedder
 from .verify_sql import verify_sql
-
-# Ensure environment variables are loaded
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +106,7 @@ class QueryEngine:
         sql = self._generate_sql(prompt)
         logger.debug("Generated SQL: %s", sql)
 
-        verify_sql(sql)  # güvenlik kontrolleri
+        verify_sql(sql, engine=self.engine)  # güvenlik kontrolleri
 
         with self.engine.connect() as conn:
             rows = conn.execute(sa.text(sql)).fetchall()
@@ -128,7 +124,12 @@ class QueryEngine:
     def _generate_sql(self, prompt: ChatPromptTemplate) -> str:
         """LLM'den tek satır SQL döndürür, arakod veya yorum siler."""
         # Deprecated __call__ yerine invoke kullan
-        response = self.llm.invoke(prompt.format_messages())
+        try:
+            response = self.llm.invoke(prompt.format_messages())
+        except Exception as exc:  # noqa: BLE001
+            logger.error("LLM invocation failed: %s", exc)
+            raise RuntimeError(f"LLM invocation failed: {exc}") from exc
+
         # ChatModel geri dönüşü AIMessage; content alanındaki metin
         sql_text = response.content.strip()
         # ```sql ... ``` bloklarını temizle

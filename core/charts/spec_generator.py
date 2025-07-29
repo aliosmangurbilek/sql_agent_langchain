@@ -69,7 +69,7 @@ def generate_chart_spec(
         return _empty_spec("No data returned", question)
 
     field_types = _infer_field_types(data)
-    chart_type, enc = _choose_chart(field_types)
+    chart_type, enc = _choose_chart(field_types, data)
     spec = _build_spec(chart_type, enc, question, sql)
 
     # İsteğe bağlı LLM post-processing
@@ -108,7 +108,7 @@ def _infer_field_types(rows: List[Dict[str, Any]]) -> Dict[str, str]:
     return types
 
 
-def _choose_chart(field_types: Dict[str, str]) -> Tuple[str, Dict[str, Any]]:
+def _choose_chart(field_types: Dict[str, str], rows: List[Dict[str, Any]]) -> Tuple[str, Dict[str, Any]]:
     """
     Basit kurallara göre chart tipi & encoding seç.
     Returns
@@ -118,6 +118,13 @@ def _choose_chart(field_types: Dict[str, str]) -> Tuple[str, Dict[str, Any]]:
     temporal = [f for f, t in field_types.items() if t == "temporal"]
     quantitative = [f for f, t in field_types.items() if t == "quantitative"]
     nominal = [f for f, t in field_types.items() if t == "nominal"]
+
+    if temporal:
+        temporal = _rank_temporal_fields(rows, temporal)
+    if quantitative:
+        quantitative = _rank_numeric_fields(rows, quantitative)
+    if nominal:
+        nominal = _rank_nominal_fields(rows, nominal)
 
     if temporal and quantitative:
         x = temporal[0]
@@ -131,6 +138,40 @@ def _choose_chart(field_types: Dict[str, str]) -> Tuple[str, Dict[str, Any]]:
         return "point", {"x": quantitative[0], "y": quantitative[1]}
     # fallback – tablo
     return "table", {"columns": list(field_types.keys())}
+
+
+def _rank_numeric_fields(rows: List[Dict[str, Any]], fields: List[str]) -> List[str]:
+    variances = {}
+    for f in fields:
+        vals = [row[f] for row in rows if isinstance(row.get(f), (int, float))]
+        variances[f] = float(np.var(vals)) if vals else 0.0
+    return sorted(fields, key=lambda x: variances[x], reverse=True)
+
+
+def _rank_nominal_fields(rows: List[Dict[str, Any]], fields: List[str]) -> List[str]:
+    counts = {}
+    for f in fields:
+        counts[f] = len({row[f] for row in rows if f in row})
+    return sorted(fields, key=lambda x: counts[x], reverse=True)
+
+
+def _rank_temporal_fields(rows: List[Dict[str, Any]], fields: List[str]) -> List[str]:
+    ranges = {}
+    for f in fields:
+        vals = []
+        for row in rows:
+            v = row.get(f)
+            if v is None:
+                continue
+            try:
+                vals.append(np.datetime64(v))
+            except Exception:
+                pass
+        if vals:
+            ranges[f] = float((max(vals) - min(vals)).astype('timedelta64[s]') / np.timedelta64(1, 's'))
+        else:
+            ranges[f] = 0.0
+    return sorted(fields, key=lambda x: ranges[x], reverse=True)
 
 
 def _build_spec(chart: str, enc: Dict[str, Any], title: str, sql: str) -> Dict[str, Any]:
