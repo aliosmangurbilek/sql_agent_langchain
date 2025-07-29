@@ -1,0 +1,75 @@
+"""
+api.routes_query
+~~~~~~~~~~~~~~~~
+
+POST /api/query
+Body (JSON):
+{
+  "db_uri": "postgresql://user:pw@localhost:5432/pagila",
+  "question": "total rentals per month in 2005 for customer Mary Smith"
+}
+
+Response:
+{
+  "sql": "...",
+  "data": [ { ... }, ... ],
+  "rowcount": 42
+}
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from functools import lru_cache
+
+from flask import Blueprint, jsonify, request
+from werkzeug.exceptions import BadRequest
+from dotenv import load_dotenv
+
+from core.db.query_engine import QueryEngine
+
+# Ensure environment variables are loaded
+load_dotenv()
+
+logger = logging.getLogger(__name__)
+bp = Blueprint("query", __name__, url_prefix="/api")
+
+
+@lru_cache(maxsize=16)  # aynı db_uri ve model için QueryEngine nesnesini sakla
+def _get_engine(db_uri: str, llm_model: str = "gpt-4o-mini") -> QueryEngine:
+    # Her db_uri ve llm_model kombinasyonu için bir kere QueryEngine oluştur
+    # Bu sayede aynı veritabanı için birden fazla kez embedding yapmayız
+    
+    # OpenRouter model için default değeri kullan
+    if llm_model == "openrouter":
+        # Model formatı: "openrouter/provider/model-name"
+        openrouter_model = os.getenv("OPENROUTER_MODEL", "openrouter/deepseek-chat-v3-0324:free")
+        logger.info(f"Using OpenRouter model: {openrouter_model}")
+        return QueryEngine(db_uri, llm_model=openrouter_model)
+    else:
+        return QueryEngine(db_uri, llm_model=llm_model)
+
+
+@bp.post("/query")
+def run_query():
+    """Doğal dil sorgusunu çalıştır ve sonucu JSON olarak döndür."""
+    if not request.is_json:
+        raise BadRequest("Request content-type must be application/json")
+
+    body = request.get_json(silent=True) or {}
+    db_uri = body.get("db_uri")
+    question = body.get("question")
+    model = body.get("model", "gpt-4o-mini")  # Default to gpt-4o-mini if not specified
+
+    if not db_uri or not question:
+        raise BadRequest("Both 'db_uri' and 'question' fields are required")
+
+    try:
+        # Model parametresini de kullan
+        qe = _get_engine(db_uri, llm_model=model)
+        result = qe.ask(question)
+        return jsonify(result), 200
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Query failed")
+        return jsonify({"error": str(exc)}), 500

@@ -1,0 +1,34 @@
+# Core Flask dependencies
+flask
+gunicorn
+gevent
+
+# LangChain and AI dependencies
+langchain
+langchain-community
+langchain-openai
+langchain-huggingface
+openai
+
+# Database dependencies
+sqlalchemy
+sqlglot
+psycopg2-binary
+pgvector
+scann
+sentence-transformers
+# Configuration and utilities
+pydantic
+pydantic-settings
+python-dotenv
+
+# Chart and data visualization dependencies
+vega-datasets
+pandas
+
+# Development and testing
+pytest
+pytest-flask
+
+# Optional local server
+uvicorn[standard]

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LangChain SQL Agent</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 LangChain SQL Agent</h1>
+            <p>Natural language to SQL queries with interactive charts</p>
+        </header>
+
+        <main>
+            <section class="config-section">
+                <h2>Configuration</h2>
+                <div class="input-group">
+                    <label for="db-uri">Database URI:</label>
+                    <div class="input-row">
+                        <input type="text" id="db-uri" placeholder="postgresql://user:pass@localhost:5432/db" value="">
+                        <button id="test-connection-btn" class="btn btn-test">Test Connection</button>
+                    </div>
+                </div>
+                <div id="test-connection-result" class="connection-status"></div>
+                <div class="input-group">
+                    <label for="model-select">Model:</label>
+                    <select id="model-select">
+                        <option value="gpt-4o-mini">OpenAI GPT-4o Mini (Default)</option>
+                        <option value="gpt-3.5-turbo">OpenAI GPT-3.5 Turbo</option>
+                        <option value="gpt-4">OpenAI GPT-4</option>
+                        <option value="gpt-4o">OpenAI GPT-4o</option>
+                        <option value="openrouter">OpenRouter - DeepSeek AI Qwen3 Coder (Free)</option>
+                        <option value="openrouter/anthropic/claude-3-haiku">OpenRouter - Claude 3 Haiku</option>
+                        <option value="openrouter/google/gemini-flash-1.5">OpenRouter - Gemini Flash 1.5</option>
+                        <option value="openrouter/meta-llama/llama-3.1-8b-instruct:free">OpenRouter - Llama 3.1 8B (Free)</option>
+                        <option value="openrouter/deepseek/deepseek-chat-v3-0324:free">OpenRouter - Llama 3.1 8B (Free)</option>
+
+                    </select>
+                </div>
+            </section>
+
+            <section class="query-section">
+                <h2>Ask a Question</h2>
+                <div class="input-group">
+                    <label for="question">Natural Language Query:</label>
+                    <textarea id="question" rows="3" placeholder="e.g., Show me the top 10 customers by revenue"></textarea>
+                </div>
+
+                <div class="button-group">
+                    <button id="run-query" class="btn btn-primary">🔍 Run Query</button>
+                    <button id="run-chart" class="btn btn-secondary">📊 Generate Chart</button>
+                </div>
+            </section>
+
+            <section class="results-section">
+                <div class="tabs">
+                    <button class="tab-btn active" data-tab="sql">SQL Query</button>
+                    <button class="tab-btn" data-tab="data">Data Results</button>
+                    <button class="tab-btn" data-tab="chart">Chart</button>
+                </div>
+
+                <div class="tab-content">
+                    <div id="sql-tab" class="tab-pane active">
+                        <h3>Generated SQL</h3>
+                        <pre><code id="sql-output">No query executed yet.</code></pre>
+                    </div>
+
+                    <div id="data-tab" class="tab-pane">
+                        <h3>Query Results</h3>
+                        <pre><code id="data-output">No data available.</code></pre>
+                    </div>
+
+                    <div id="chart-tab" class="tab-pane">
+                        <h3>Visualization</h3>
+                        <div id="chart-output">No chart generated yet.</div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="status-section">
+                <div id="loading" class="loading hidden">
+                    <div class="spinner"></div>
+                    <span>Processing...</span>
+                </div>
+                <div id="error" class="error hidden"></div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        // Test Connection functionality
+        document.getElementById('test-connection-btn').addEventListener('click', async () => {
+            const dbUri = document.getElementById('db-uri').value;
+            const resultDiv = document.getElementById('test-connection-result');
+            
+            if (!dbUri) {
+                resultDiv.innerHTML = '<span class="error">Please enter a database URI first!</span>';
+                return;
+            }
+
+            resultDiv.innerHTML = '<span class="loading">Testing connection...</span>';
+
+            try {
+                const response = await fetch('/api/test_connection', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ db_uri: dbUri }),
+                });
+
+                const result = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.innerHTML = `<span class="success">✅ Connection successful!</span>`;
+                } else {
+                    resultDiv.innerHTML = `<span class="error">❌ Connection failed: ${result.error}</span>`;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<span class="error">❌ Error: ${error.message}</span>`;
+            }
+        });
+    </script>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
