@@ -109,11 +109,21 @@ class QueryEngine:
         verify_sql(sql, engine=self.engine)  # güvenlik kontrolleri
 
         with self.engine.connect() as conn:
-            rows = conn.execute(sa.text(sql)).fetchall()
+            result = conn.execute(sa.text(sql))
+            rows = result.fetchall()
+            
+            # SQLAlchemy 2.0+ için uyumlu veri dönüşümü
+            if rows:
+                # Kolon isimlerini al
+                columns = list(result.keys())
+                # Her satırı dictionary'ye çevir
+                data = [dict(zip(columns, row)) for row in rows]
+            else:
+                data = []
 
         return {
             "sql": sql,
-            "data": [dict(r) for r in rows],
+            "data": data,
             "rowcount": len(rows),
         }
 
@@ -132,7 +142,35 @@ class QueryEngine:
 
         # ChatModel geri dönüşü AIMessage; content alanındaki metin
         sql_text = response.content.strip()
+        
         # ```sql ... ``` bloklarını temizle
-        if sql_text.startswith("```"):
-            sql_text = sql_text.split("```")[1] if "```" in sql_text else sql_text
+        if "```sql" in sql_text:
+            # ```sql ile başlayıp ``` ile biten blokları temizle
+            lines = sql_text.split('\n')
+            sql_lines = []
+            in_sql_block = False
+            
+            for line in lines:
+                if line.strip().startswith('```sql'):
+                    in_sql_block = True
+                    continue
+                elif line.strip() == '```' and in_sql_block:
+                    in_sql_block = False
+                    continue
+                elif in_sql_block:
+                    sql_lines.append(line)
+            
+            sql_text = '\n'.join(sql_lines).strip()
+        elif sql_text.startswith("```"):
+            # Genel kod bloklarını temizle
+            parts = sql_text.split("```")
+            if len(parts) >= 3:
+                sql_text = parts[1].strip()
+            else:
+                sql_text = sql_text.replace("```", "").strip()
+        
+        # SQL kelimesini temizle (başında kalmış olabilir)
+        if sql_text.lower().startswith('sql\n'):
+            sql_text = sql_text[4:].strip()
+        
         return sql_text.strip(" ;\n")

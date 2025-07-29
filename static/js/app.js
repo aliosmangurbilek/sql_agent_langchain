@@ -21,13 +21,12 @@ document.addEventListener('DOMContentLoaded', function() {
     if (savedDbUri) {
         dbUriInput.value = savedDbUri;
     }
-    // Load saved model from localStorage
-    const savedModel = localStorage.getItem('selectedModel');
-    if (savedModel) {
-        modelSelect.value = savedModel;
-    }
+    
     // Setup event listeners
     setupEventListeners();
+
+    // Load models from OpenRouter
+    loadModels();
 
     // Load sample questions
     loadSampleQuestions();
@@ -47,6 +46,19 @@ function setupEventListeners() {
     modelSelect.addEventListener('change', () => {
         localStorage.setItem('selectedModel', modelSelect.value);
     });
+
+    // Refresh models button
+    const refreshModelsBtn = document.getElementById('refresh-models-btn');
+    if (refreshModelsBtn) {
+        refreshModelsBtn.addEventListener('click', () => {
+            refreshModelsBtn.disabled = true;
+            refreshModelsBtn.textContent = '⏳';
+            loadModels().finally(() => {
+                refreshModelsBtn.disabled = false;
+                refreshModelsBtn.textContent = '🔄';
+            });
+        });
+    }
 
     // Query execution
     runQueryBtn.addEventListener('click', executeQuery);
@@ -240,6 +252,85 @@ async function checkHealth() {
     } catch (error) {
         console.error('Health check failed:', error);
         return false;
+    }
+}
+
+// Load models from OpenRouter API
+async function loadModels() {
+    try {
+        const response = await fetch('/api/models');
+        const data = await response.json();
+        
+        if (response.ok) {
+            populateModelSelect(data.models);
+        } else {
+            console.error('Failed to load models:', data.error);
+            // Fallback to default models
+            populateModelSelect([
+                { id: 'deepseek/deepseek-chat', name: 'DeepSeek Chat (Free)', is_free: true },
+                { id: 'meta-llama/llama-3.1-8b-instruct:free', name: 'Llama 3.1 8B (Free)', is_free: true },
+                { id: 'qwen/qwen-2.5-7b-instruct:free', name: 'Qwen 2.5 7B (Free)', is_free: true }
+            ]);
+        }
+    } catch (error) {
+        console.error('Error loading models:', error);
+        // Fallback to default models
+        populateModelSelect([
+            { id: 'deepseek/deepseek-chat', name: 'DeepSeek Chat (Free)', is_free: true },
+            { id: 'meta-llama/llama-3.1-8b-instruct:free', name: 'Llama 3.1 8B (Free)', is_free: true },
+            { id: 'qwen/qwen-2.5-7b-instruct:free', name: 'Qwen 2.5 7B (Free)', is_free: true }
+        ]);
+    }
+}
+
+function populateModelSelect(models) {
+    // Clear existing options
+    modelSelect.innerHTML = '';
+    
+    // Add default option
+    const defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.textContent = 'Select a model...';
+    modelSelect.appendChild(defaultOption);
+    
+    // Group models by free/paid
+    const freeModels = models.filter(m => m.is_free);
+    const paidModels = models.filter(m => !m.is_free);
+    
+    // Add free models first
+    if (freeModels.length > 0) {
+        const freeGroup = document.createElement('optgroup');
+        freeGroup.label = '🆓 Free Models';
+        freeModels.forEach(model => {
+            const option = document.createElement('option');
+            option.value = model.id;
+            option.textContent = `${model.name} (${model.provider})`;
+            freeGroup.appendChild(option);
+        });
+        modelSelect.appendChild(freeGroup);
+    }
+    
+    // Add paid models
+    if (paidModels.length > 0) {
+        const paidGroup = document.createElement('optgroup');
+        paidGroup.label = '💰 Paid Models';
+        paidModels.forEach(model => {
+            const option = document.createElement('option');
+            option.value = model.id;
+            option.textContent = `${model.name} (${model.provider})`;
+            paidGroup.appendChild(option);
+        });
+        modelSelect.appendChild(paidGroup);
+    }
+    
+    // Enable the select and restore saved selection
+    modelSelect.disabled = false;
+    const savedModel = localStorage.getItem('selectedModel');
+    if (savedModel && Array.from(modelSelect.options).some(option => option.value === savedModel)) {
+        modelSelect.value = savedModel;
+    } else if (freeModels.length > 0) {
+        // Default to first free model
+        modelSelect.value = freeModels[0].id;
     }
 }
 
