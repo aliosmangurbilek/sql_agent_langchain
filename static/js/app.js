@@ -156,6 +156,18 @@ function handleQueryResponse(data) {
         sqlOutput.textContent = 'No answer returned';
     }
 
+    // Show SQL query if returned
+    if (data.sql) {
+        sqlOutput.textContent += `\nSQL: ${data.sql}`;
+    }
+
+    // Display data rows if available
+    if (data.data && data.data.length > 0) {
+        dataOutput.textContent = JSON.stringify(data.data, null, 2);
+    } else {
+        dataOutput.textContent = 'No data returned';
+    }
+
     // Display embedding suggestions if available
     const suggestionsDiv = document.getElementById('embedding-suggestions');
     if (suggestionsDiv) {
