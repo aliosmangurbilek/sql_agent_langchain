@@ -26,6 +26,8 @@ from flask import Blueprint, jsonify, request
 from werkzeug.exceptions import BadRequest
 
 from core.db.query_engine import QueryEngine
+from core.db.embedder import DBEmbedder
+import sqlalchemy as sa
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("query", __name__, url_prefix="/api")
@@ -59,10 +61,23 @@ def run_query():
         # Model parametresini de kullan
         qe = _get_engine(db_uri, llm_model=model)
         result = qe.ask(question)
-        return jsonify(result), 200
     except Exception as exc:  # noqa: BLE001
         logger.exception("Query failed")
         return jsonify({"error": str(exc)}), 500
+
+    # Embedding ile en alakalı tablo/kolon önerilerini ekle
+    try:
+        sa_engine = sa.create_engine(db_uri)
+        embedder = DBEmbedder(sa_engine)
+        suggestions = embedder.similarity_search(question, k=3)
+    except Exception as e:
+        logger.warning(f"Embedding suggestions error: {e}")
+        suggestions = []
+
+    return jsonify({
+        "answer": result,
+        "embedding_suggestions": suggestions
+    }), 200
 
 
 @bp.get("/models")
@@ -86,37 +101,45 @@ def get_models():
         models_data = response.json()
         models = models_data.get("data", [])
         
-        # Modelleri filtrele ve düzenle
-        filtered_models = []
-        
+        # Model arama terimi (opsiyonel)
+        search_query = request.args.get("search", "").lower()
+
+        # Tüm modelleri listele ve arama uygula
+        listed_models = []
         for model in models:
             model_id = model.get("id", "")
             name = model.get("name", model_id)
+            description = model.get("description", "")
             pricing = model.get("pricing", {})
-            
-            # Ücretsiz modelleri kontrol et
             prompt_price = float(pricing.get("prompt", "1"))
             completion_price = float(pricing.get("completion", "1"))
             is_free = prompt_price == 0 and completion_price == 0
-            
-            # Popüler ücretsiz modelleri ekle
-            if is_free or any(free_model in model_id.lower() for free_model in [
-                "deepseek", "llama-3.1", "qwen", "gemini-flash", "claude-3-haiku"
-            ]):
-                filtered_models.append({
+            context_length = model.get("context_length", 4096)
+            provider = model_id.split("/")[0] if "/" in model_id else "unknown"
+            # Arama terimi varsa filtrele
+            if search_query:
+                if search_query in name.lower() or search_query in model_id.lower() or search_query in description.lower():
+                    listed_models.append({
+                        "id": model_id,
+                        "name": name,
+                        "description": description,
+                        "is_free": is_free,
+                        "context_length": context_length,
+                        "provider": provider
+                    })
+            else:
+                listed_models.append({
                     "id": model_id,
                     "name": name,
+                    "description": description,
                     "is_free": is_free,
-                    "context_length": model.get("context_length", 4096),
-                    "provider": model_id.split("/")[0] if "/" in model_id else "unknown"
+                    "context_length": context_length,
+                    "provider": provider
                 })
-        
-        # Ücretsiz modelleri başa al, sonra diğerlerini ekle
-        filtered_models.sort(key=lambda x: (not x["is_free"], x["name"]))
-        
+
         return jsonify({
-            "models": filtered_models[:50],  # İlk 50 modeli döndür
-            "total": len(filtered_models)
+            "models": listed_models,  # Tüm modelleri döndür
+            "total": len(listed_models)
         }), 200
         
     except requests.RequestException as exc:

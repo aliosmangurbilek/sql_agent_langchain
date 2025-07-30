@@ -156,6 +156,21 @@ function handleQueryResponse(data) {
         sqlOutput.textContent = 'No answer returned';
     }
 
+    // Display embedding suggestions if available
+    const suggestionsDiv = document.getElementById('embedding-suggestions');
+    if (suggestionsDiv) {
+        if (data.embedding_suggestions && data.embedding_suggestions.length > 0) {
+            let html = '<b>Embedding Suggestions:</b><ul>';
+            data.embedding_suggestions.forEach(s => {
+                html += `<li><b>Table:</b> ${s.table} <b>Score:</b> ${s.score.toFixed(3)}<br><span>${s.text}</span></li>`;
+            });
+            html += '</ul>';
+            suggestionsDiv.innerHTML = html;
+        } else {
+            suggestionsDiv.innerHTML = '';
+        }
+    }
+
     // Switch to SQL tab to show results
     switchTab('sql');
 }

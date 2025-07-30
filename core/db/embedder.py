@@ -101,7 +101,7 @@ class DBEmbedder:
             return [
                 {
                     "table": doc.metadata["table"],
-                    "score": score,
+                    "score": float(score),
                     "text": doc.page_content,
                 }
                 for doc, score in hits
@@ -121,7 +121,7 @@ class DBEmbedder:
             return [
                 {
                     "table": doc.metadata["table"],
-                    "score": score,
+                    "score": float(score),
                     "text": doc.page_content,
                 }
                 for doc, score in hits
