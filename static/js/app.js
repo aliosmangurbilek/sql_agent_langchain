@@ -283,10 +283,10 @@ function loadSampleQuestions() {
 // Health check function
 async function checkHealth() {
     try {
-        const response = await fetch('/healthz');
+        const response = await fetch('/api/healthz');
         const data = await response.json();
         console.log('Health check:', data);
-        return data.status === 'healthy';
+        return data.status === 'ok';
     } catch (error) {
         console.error('Health check failed:', error);
         return false;

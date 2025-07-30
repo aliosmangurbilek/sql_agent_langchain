@@ -153,6 +153,6 @@ if __name__ == "__main__":
         sys.exit("Usage: python -m core.db.embedder <DB_URI>")
     uri = sys.argv[1]
     eng = sa.create_engine(uri)
-    emb = DBEmbedder(eng, force_rebuild=True)
+    emb = DBEmbedder(eng)
     emb.rebuild()
     print(json.dumps(emb.similarity_search("customer rentals 2005", k=3), indent=2))
