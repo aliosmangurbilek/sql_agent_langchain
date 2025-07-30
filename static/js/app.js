@@ -9,6 +9,7 @@ const dataOutput = document.getElementById('data-output');
 const chartOutput = document.getElementById('chart-output');
 const loadingDiv = document.getElementById('loading');
 const errorDiv = document.getElementById('error');
+const themeToggle = document.getElementById('theme-toggle');
 
 // Tab functionality
 const tabBtns = document.querySelectorAll('.tab-btn');
@@ -21,6 +22,10 @@ document.addEventListener('DOMContentLoaded', function() {
     if (savedDbUri) {
         dbUriInput.value = savedDbUri;
     }
+
+    // Apply saved theme
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    setTheme(savedTheme);
     
     // Setup event listeners
     setupEventListeners();
@@ -70,6 +75,15 @@ function setupEventListeners() {
             executeQuery();
         }
     });
+
+    // Theme toggle
+    if (themeToggle) {
+        themeToggle.addEventListener('click', () => {
+            const newTheme = document.body.classList.contains('dark-mode') ? 'light' : 'dark';
+            setTheme(newTheme);
+            localStorage.setItem('theme', newTheme);
+        });
+    }
 }
 
 function switchTab(tabName) {
@@ -364,3 +378,17 @@ checkHealth().then(healthy => {
         showError('Backend service is not responding. Please check the server.');
     }
 });
+
+function setTheme(mode) {
+    if (mode === 'dark') {
+        document.body.classList.add('dark-mode');
+        if (themeToggle) {
+            themeToggle.textContent = '☀️ Light Mode';
+        }
+    } else {
+        document.body.classList.remove('dark-mode');
+        if (themeToggle) {
+            themeToggle.textContent = '🌙 Dark Mode';
+        }
+    }
+}
