@@ -32,7 +32,7 @@ def create_app() -> Flask:
     # Register blueprints
     app.register_blueprint(query_bp)
     app.register_blueprint(chart_bp)
-    app.register_blueprint(health_bp)
+    app.register_blueprint(health_bp, url_prefix='/api')
 
     # Main route for the web interface
     @app.route('/')

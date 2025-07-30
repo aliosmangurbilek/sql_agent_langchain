@@ -27,7 +27,7 @@ class DBEmbedder:
         *,
         db_name: str | None = None,
         store_dir: str | Path = "storage/vectors",
-        embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+        embedding_model: str = "sentence-transformers/all-mpnet-base-v2",
         force_rebuild: bool = False
     ) -> None:
         self.engine = engine
