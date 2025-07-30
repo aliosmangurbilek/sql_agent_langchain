@@ -75,8 +75,11 @@ def run_query():
         suggestions = []
 
     return jsonify({
-        "answer": result,
-        "embedding_suggestions": suggestions
+        "answer": result.get("answer"),
+        "sql": result.get("sql"),
+        "data": result.get("data"),
+        "rowcount": result.get("rowcount"),
+        "embedding_suggestions": suggestions,
     }), 200
 
 

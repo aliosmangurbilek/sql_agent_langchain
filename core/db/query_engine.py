@@ -43,9 +43,10 @@ class LoggingSQLDatabase(SQLDatabase):
             parameters=parameters,
             execution_options=execution_options,
         )
-        self.last_result = result
 
         if fetch == "cursor":
+            # nothing meaningful to store for charting
+            self.last_result = []
             return result
 
         res = [
@@ -55,6 +56,9 @@ class LoggingSQLDatabase(SQLDatabase):
             }
             for r in result
         ]
+
+        # store the processed rows for later retrieval
+        self.last_result = res
 
         if not include_columns:
             res = [tuple(row.values()) for row in res]
@@ -117,9 +121,12 @@ class QueryEngine:
         result = self.agent.invoke({"input": nl_query})
         answer = result.get("output", "") if isinstance(result, dict) else str(result)
 
+        rows = getattr(self.db, "last_result", [])
+
         return {
             "answer": answer,
             "sql": getattr(self.db, "last_query", ""),
-            "data": getattr(self.db, "last_result", []),
+            "data": rows,
+            "rowcount": len(rows),
         }
 
