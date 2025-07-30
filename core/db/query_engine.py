@@ -107,7 +107,14 @@ class QueryEngine:
 
         self.db = LoggingSQLDatabase(self.engine)
         toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
-        self.agent = create_sql_agent(llm=self.llm, toolkit=toolkit, verbose=False)
+        # Pass handle_parsing_errors=True so that the agent can retry when
+        # the LLM returns malformed output instead of raising an exception.
+        self.agent = create_sql_agent(
+            llm=self.llm,
+            toolkit=toolkit,
+            verbose=False,
+            agent_executor_kwargs={"handle_parsing_errors": True},
+        )
 
         logger.info(f"Using OpenRouter with model: {llm_model}")
 
