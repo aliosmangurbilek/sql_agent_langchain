@@ -115,6 +115,7 @@ function hideError() {
 
 function handleError(error) {
     console.error('Request failed:', error);
+
     const msg = error && error.message ? error.message : 'An unexpected error occurred';
     showError(msg);
 }
@@ -136,6 +137,7 @@ async function fetchJson(url, options) {
     } catch (_) {
         throw new Error('Invalid JSON response');
     }
+
 }
 
 function executeQuery() {
