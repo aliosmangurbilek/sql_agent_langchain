@@ -50,25 +50,31 @@ def get_models():
             # Modelleri filtrele ve formatla
             filtered_models = []
             for model in models_data.get("data", []):
-                # Sadece aktif modelleri al
                 if not model.get("top_provider", {}).get("is_moderated", True):
                     continue
-                    
+
+                pricing = model.get("pricing", {}) or {}
+                prompt_price = float(pricing.get("prompt", "0"))
+                completion_price = float(pricing.get("completion", "0"))
+                total_price = prompt_price + completion_price
+
                 filtered_models.append({
                     "id": model["id"],
                     "name": model.get("name", model["id"]),
                     "description": model.get("description", ""),
                     "context_length": model.get("context_length", 0),
                     "pricing": {
-                        "prompt": model.get("pricing", {}).get("prompt", "0"),
-                        "completion": model.get("pricing", {}).get("completion", "0")
+                        "prompt": f"{prompt_price:.6f}",
+                        "completion": f"{completion_price:.6f}",
+                        "total": f"{total_price:.6f}",
                     },
                     "architecture": model.get("architecture", {}),
-                    "is_free": model.get("pricing", {}).get("prompt", "0") == "0"
+                    "is_free": total_price == 0,
+                    "total_price": total_price,  # ◄– sıralamada kullanacağımız alan
                 })
-            
-            # Ücretsiz modelleri önce sırala
-            filtered_models.sort(key=lambda x: (not x["is_free"], x["name"]))
+
+            # ➊  önce fiyat, ➋  sonra isim
+            filtered_models.sort(key=lambda m: (m["total_price"], m["name"]))
             
             return jsonify({
                 "status": "success",

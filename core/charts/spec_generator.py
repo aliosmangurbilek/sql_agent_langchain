@@ -44,7 +44,7 @@ def generate_chart_spec(
     sql: str,
     data: List[Dict[str, Any]],
     *,
-    use_llm: bool = False,
+    use_llm: bool = True,
 ) -> Dict[str, Any]:
     """
     Heuristik (ve isteğe bağlı LLM) tabanlı Vega-Lite spec üret.
@@ -224,7 +224,7 @@ def _llm_refine_spec(spec: Dict[str, Any], question: str) -> Dict[str, Any]:
     """OpenAI ile heuristik spec'i iyileştir (ör. renk, sorting, axis)."""
     if ChatOpenAI is None:
         return spec
-    llm = ChatOpenAI(temperature=0.0, model="gpt-4o-mini")
+    llm = ChatOpenAI(temperature=0.0, model="openai/gpt-4o-mini-2024-07-18")
 
     system = (
         "You are a data visualisation expert. "

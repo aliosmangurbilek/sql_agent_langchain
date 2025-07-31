@@ -20,14 +20,6 @@ from typing import Any, Dict, List
 import warnings
 import sqlalchemy as sa
 # Suppress SAWarning for unrecognized 'vector' column types
-warnings.filterwarnings(
-    'ignore',
-    r"Did not recognize type 'vector' of column",
-    category=Warning,
-    module='sqlalchemy'
-)
-# Suppress SAWarning for unrecognized 'vector' types
-import warnings
 try:
     from sqlalchemy.exc import SAWarning
     warnings.filterwarnings(
