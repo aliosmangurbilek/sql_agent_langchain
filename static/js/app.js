@@ -136,6 +136,7 @@ async function fetchJson(url, options) {
     } catch (_) {
         throw new Error('Invalid JSON response');
     }
+
 }
 
 function executeQuery() {
