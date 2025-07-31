@@ -113,6 +113,31 @@ function hideError() {
     errorDiv.classList.add('hidden');
 }
 
+function handleError(error) {
+    console.error('Request failed:', error);
+    const msg = error && error.message ? error.message : 'An unexpected error occurred';
+    showError(msg);
+}
+
+// Helper to fetch JSON with graceful error handling
+async function fetchJson(url, options) {
+    const response = await fetch(url, options);
+    const text = await response.text();
+    if (!response.ok) {
+        try {
+            const data = JSON.parse(text);
+            throw new Error(data.error || response.statusText);
+        } catch (_) {
+            throw new Error(text || response.statusText);
+        }
+    }
+    try {
+        return JSON.parse(text);
+    } catch (_) {
+        throw new Error('Invalid JSON response');
+    }
+}
+
 function executeQuery() {
     const dbUri = dbUriInput.value.trim();
     const question = questionInput.value.trim();
@@ -124,12 +149,11 @@ function executeQuery() {
     }
 
     showLoading();
-    fetch('/api/query', {
+    fetchJson('/api/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ db_uri: dbUri, question: question, model: model })
     })
-    .then(res => res.json())
     .then(handleQueryResponse)
     .catch(handleError)
     .finally(hideLoading);
@@ -146,12 +170,11 @@ function generateChart() {
     }
 
     showLoading();
-    fetch('/api/chart', {
+    fetchJson('/api/chart', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ db_uri: dbUri, question: question, model: model })
     })
-    .then(res => res.json())
     .then(handleChartResponse)
     .catch(handleError)
     .finally(hideLoading);
@@ -283,8 +306,7 @@ function loadSampleQuestions() {
 // Health check function
 async function checkHealth() {
     try {
-        const response = await fetch('/api/healthz');
-        const data = await response.json();
+        const data = await fetchJson('/api/healthz');
         console.log('Health check:', data);
         return data.status === 'ok';
     } catch (error) {
@@ -296,10 +318,8 @@ async function checkHealth() {
 // Load models from OpenRouter API
 async function loadModels() {
     try {
-        const response = await fetch('/api/models');
-        const data = await response.json();
-        
-        if (response.ok) {
+        const data = await fetchJson('/api/models');
+        if (data.models) {
             populateModelSelect(data.models);
         } else {
             console.error('Failed to load models:', data.error);
