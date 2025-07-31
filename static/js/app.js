@@ -113,6 +113,11 @@ function hideError() {
     errorDiv.classList.add('hidden');
 }
 
+function handleError(error) {
+    console.error('Request failed:', error);
+    showError(error.message || 'An unexpected error occurred');
+}
+
 function executeQuery() {
     const dbUri = dbUriInput.value.trim();
     const question = questionInput.value.trim();
