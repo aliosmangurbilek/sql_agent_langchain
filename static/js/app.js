@@ -115,7 +115,6 @@ function hideError() {
 
 function handleError(error) {
     console.error('Request failed:', error);
-
     const msg = error && error.message ? error.message : 'An unexpected error occurred';
     showError(msg);
 }
