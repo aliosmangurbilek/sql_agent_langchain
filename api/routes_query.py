@@ -61,6 +61,12 @@ def run_query():
         # Model parametresini de kullan
         qe = _get_engine(db_uri, llm_model=model)
         result = qe.ask(question)
+        
+        # Log the result for debugging
+        logger.info(f"📊 Query result: {result.get('rowcount', 0)} rows returned")
+        if result.get('sql'):
+            logger.info(f"🔍 Executed SQL: {result['sql']}")
+            
     except Exception as exc:  # noqa: BLE001
         logger.exception("Query failed")
         return jsonify({"error": str(exc)}), 500

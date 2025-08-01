@@ -26,6 +26,7 @@ generate_chart_spec(..., use_llm=False) # Sadece heuristik
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from typing import Any, Dict, List, Tuple
@@ -35,11 +36,20 @@ import numpy as np
 # İsteğe bağlı LLM
 try:
     from langchain_openai import ChatOpenAI
+    try:
+        # Try new import path first
+        from langchain_core.messages import SystemMessage, HumanMessage
+    except ImportError:
+        # Fallback to old import path
+        from langchain.schema.messages import SystemMessage, HumanMessage
     _OPENAI_READY = bool(os.getenv("OPENAI_API_KEY"))
-except ModuleNotFoundError:  # langchain kurulu değilse
+except (ModuleNotFoundError, ImportError):  # langchain kurulu değilse
     ChatOpenAI = None  # type: ignore
+    SystemMessage = None  # type: ignore
+    HumanMessage = None  # type: ignore
     _OPENAI_READY = False
 
+logger = logging.getLogger(__name__)
 
 # ------------------------------------------------------------------ #
 # Public API
@@ -73,19 +83,36 @@ def generate_chart_spec(
         Vega-Lite 5 JSON spec (frontend `vega.embed()` ile çizilebilir).
     """
     if not data:
+        logger.info("📊 No data provided for chart generation")
         return _empty_spec("No data returned", question)
 
+    logger.info(f"📈 Generating chart for {len(data)} rows of data")
     field_types = _infer_field_types(data)
+    logger.info(f"🔍 Detected field types: {field_types}")
+    
     chart_type, enc = _choose_chart(field_types, data)
+    logger.info(f"📊 Selected chart type: {chart_type}")
+    
     spec = _build_spec(chart_type, enc, question, sql, data)
 
     # İsteğe bağlı LLM post-processing
     if use_llm and _OPENAI_READY:
+        logger.info("🤖 Enhancing chart with LLM post-processing...")
         try:
-            spec = _llm_refine_spec(spec, question)
-        except Exception:  # noqa: BLE001
+            enhanced_spec = _llm_refine_spec(spec, question)
+            if enhanced_spec != spec:
+                logger.info("✅ Chart enhanced successfully with LLM")
+                spec = enhanced_spec
+            else:
+                logger.info("📊 LLM returned same spec (no changes needed)")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"⚠️  LLM enhancement failed: {e}, using heuristic chart")
             # LLM başarısızsa heuristik spec ile devam - no action needed
-            pass  # This pass is intentional for exception handling
+    else:
+        if not _OPENAI_READY:
+            logger.info("📊 Using heuristic chart generation (no OpenAI API key)")
+        else:
+            logger.info("📊 Using heuristic chart generation (LLM not requested)")
 
     return spec
 
@@ -251,25 +278,42 @@ def _build_spec(chart: str, enc: Dict[str, Any], title: str, sql: str, data: Lis
 def _llm_refine_spec(spec: Dict[str, Any], question: str) -> Dict[str, Any]:
     """OpenAI ile heuristik spec'i iyileştir (ör. renk, sorting, axis)."""
     if ChatOpenAI is None:
+        logger.warning("🚫 ChatOpenAI not available, skipping LLM enhancement")
         return spec
-    llm = ChatOpenAI(temperature=0.0, model="gpt-4o-mini-2024-07-18")
-
-    system = (
-        "You are a data visualisation expert. "
-        "Given a draft Vega-Lite spec and the user's question, "
-        "return an improved Vega-Lite v5 JSON. "
-        "If the draft is already ok, just return it unchanged."
-    )
-    user = (
-        f"User question:\n{question}\n\n"
-        f"Draft spec JSON:\n{json.dumps(spec, indent=2)}"
-    )
-    resp = llm([("system", system), ("user", user)])
+        
     try:
-        refined = json.loads(resp[0].content.strip("```json").strip())
+        llm = ChatOpenAI(temperature=0.0, model="gpt-4o-mini-2024-07-18")
+
+        system = (
+            "You are a data visualisation expert. "
+            "Given a draft Vega-Lite spec and the user's question, "
+            "return an improved Vega-Lite v5 JSON. "
+            "If the draft is already ok, just return it unchanged."
+        )
+        user = (
+            f"User question:\n{question}\n\n"
+            f"Draft spec JSON:\n{json.dumps(spec, indent=2)}"
+        )
+        
+        # Use invoke instead of deprecated __call__ method
+        if SystemMessage is None or HumanMessage is None:
+            logger.warning("🚫 Message classes not available, skipping LLM enhancement")
+            return spec
+            
+        messages = [SystemMessage(content=system), HumanMessage(content=user)]
+        resp = llm.invoke(messages)
+        
+        # Extract content from response
+        content = resp.content if hasattr(resp, 'content') else str(resp)
+        refined = json.loads(content.strip("```json").strip("```").strip())
+        logger.info("✅ Chart successfully enhanced with LLM")
         return refined
-    except json.JSONDecodeError:
-        # LLM çıktısı parse edilemediyse orijinali koru
+        
+    except json.JSONDecodeError as e:
+        logger.warning(f"⚠️  Failed to parse LLM response: {e}")
+        return spec
+    except Exception as e:
+        logger.warning(f"⚠️  LLM enhancement failed: {e}")
         return spec
 
 

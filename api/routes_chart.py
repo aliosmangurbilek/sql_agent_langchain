@@ -71,13 +71,29 @@ def run_chart():
         qe = _get_engine(db_uri, llm_model=model)
         result = qe.ask(question)              # {"sql", "data", "rowcount"}
 
-        # Grafik spec'ini üret
-        vega_spec = generate_chart_spec(
-            question=question,
-            sql=result["sql"],
-            data=result["data"],
-            use_llm=True,  # OpenAI API key varsa LLM ile üret
-        )
+        # Check if we have data for chart generation
+        if not result["data"] or result["rowcount"] == 0:
+            logger.warning(f"⚠️  No data returned for chart generation. SQL: {result['sql']}")
+            # Return a meaningful response with empty chart spec
+            vega_spec = {
+                "data": {"values": []},
+                "mark": "text",
+                "encoding": {
+                    "text": {"value": "No data available for visualization"}
+                },
+                "title": f"No Data Found: {question}",
+                "width": 400,
+                "height": 200
+            }
+        else:
+            logger.info(f"📈 Generating chart for {result['rowcount']} rows")
+            # Grafik spec'ini üret
+            vega_spec = generate_chart_spec(
+                question=question,
+                sql=result["sql"],
+                data=result["data"],
+                use_llm=True,  # OpenAI API key varsa LLM ile üret
+            )
 
         return (
             jsonify(

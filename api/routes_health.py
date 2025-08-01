@@ -118,9 +118,21 @@ def test_connection():
             # Basit bir test sorgusu çalıştır
             result = conn.execute(sa.text("SELECT 1"))
             result.fetchone()
+            
+            # Tablo sayısını öğren
+            inspector = sa.inspect(engine)
+            table_names = inspector.get_table_names()
+            table_count = len(table_names)
         
         logger.info(f"Database connection test successful for URI: {db_uri[:20]}...")
-        return jsonify({'status': 'success', 'message': 'Connection successful'}), 200
+        logger.info(f"Found {table_count} tables: {table_names[:5]}{'...' if len(table_names) > 5 else ''}")
+        
+        return jsonify({
+            'status': 'success', 
+            'message': 'Connection successful',
+            'table_count': table_count,
+            'tables': table_names[:10]  # İlk 10 tabloyu göster
+        }), 200
         
     except OperationalError as exc:
         error_msg = str(exc.orig) if hasattr(exc, 'orig') else str(exc)

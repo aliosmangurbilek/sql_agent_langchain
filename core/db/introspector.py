@@ -17,6 +17,7 @@ Usage
 # Core imports
 from collections import defaultdict
 from typing import Any, Dict, List
+import logging
 import warnings
 import sqlalchemy as sa
 # Suppress SAWarning for unrecognized 'vector' column types
@@ -29,6 +30,8 @@ try:
     )
 except ImportError:
     pass
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["get_metadata"]
 
@@ -57,6 +60,9 @@ def get_metadata(engine: sa.Engine, sample_rows: int = 0) -> List[Dict[str, Any]
     """
     inspector = sa.inspect(engine)
     meta: List[Dict[str, Any]] = []
+    
+    table_names = inspector.get_table_names()
+    logger.info(f"🗄️  Found {len(table_names)} tables: {table_names}")
 
     for table_name in inspector.get_table_names():
         for col in inspector.get_columns(table_name):

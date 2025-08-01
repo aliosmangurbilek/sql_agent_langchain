@@ -39,12 +39,20 @@ class ProgressCallbackHandler(BaseCallbackHandler):
         """Called when LLM starts generating."""
         self.current_step += 1
         progress = min(30 + (self.current_step * 10), 70)
+        
+        # Log to terminal for progress tracking
+        logger.info(f"🧠 LLM Processing - Step {self.current_step}: Analyzing query...")
+        
         self.progress_callback("llm_thinking", "AI is analyzing your question...", progress)
         
     def on_llm_end(self, response: LLMResult, **kwargs) -> None:
         """Called when LLM finishes generating."""
         self.current_step += 1
         progress = min(40 + (self.current_step * 8), 75)
+        
+        # Log to terminal
+        logger.info("✅ LLM Response generated successfully")
+        
         self.progress_callback("llm_response", "AI has generated a response...", progress)
         
     def on_agent_action(self, action: AgentAction, **kwargs) -> None:
@@ -54,19 +62,24 @@ class ProgressCallbackHandler(BaseCallbackHandler):
         
         if "sql_db_list_tables" in tool_name.lower():
             progress = 45
+            logger.info("🗃️  Agent Tool: Exploring database schema...")
             self.progress_callback("db_schema", "Exploring database schema...", progress)
         elif "sql_db_schema" in tool_name.lower():
             progress = 55
+            logger.info("📋 Agent Tool: Analyzing table structure...")
             self.progress_callback("table_schema", "Analyzing table structure...", progress)
         elif "sql_db_query" in tool_name.lower():
             progress = 70
+            logger.info("🔍 Agent Tool: Executing SQL query...")
             self.progress_callback("sql_execution", "Executing SQL query...", progress)
         else:
             progress = min(50 + (self.current_step * 5), 80)
+            logger.info(f"🔧 Agent Tool: {tool_name}")
             self.progress_callback("agent_action", f"Executing: {tool_name}", progress)
             
     def on_agent_finish(self, finish: AgentFinish, **kwargs) -> None:
         """Called when agent finishes."""
+        logger.info("🎯 Agent execution completed successfully!")
         self.progress_callback("agent_complete", "Agent execution completed!", 90)
 
 
@@ -83,6 +96,8 @@ class LoggingSQLDatabase(SQLDatabase):
         execution_options: Dict[str, Any] | None = None,
     ) -> sa.engine.Result | str | list[Dict[str, Any]]:
         self.last_query = str(command)
+        logger.info(f"🔍 Executing SQL Query: {self.last_query}")
+        
         result = self._execute(
             command,
             fetch,
@@ -105,11 +120,14 @@ class LoggingSQLDatabase(SQLDatabase):
 
         # store the processed rows for later retrieval
         self.last_result = res
+        
+        logger.info(f"📊 Query returned {len(res)} rows")
 
         if not include_columns:
             res = [tuple(row.values()) for row in res]
 
         if not res:
+            logger.warning("⚠️  Query returned no results")
             return ""
         else:
             return str(res)
@@ -133,13 +151,16 @@ class QueryEngine:
         db_uri: str,
         llm_model: str = "deepseek/deepseek-chat",
     ) -> None:
+        logger.info(f"🔧 Initializing Query Engine with model: {llm_model}")
         self.engine = sa.create_engine(db_uri)
+        logger.info(f"📊 Database connection established: {db_uri}")
 
         # OpenRouter için ChatOpenAI yapılandırması
         openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
         if not openrouter_api_key:
             raise ValueError("OPENROUTER_API_KEY not found in environment variables")
 
+        logger.info("🤖 Setting up OpenRouter LLM...")
         self.llm = ChatOpenAI(
             api_key=openrouter_api_key,
             base_url="https://openrouter.ai/api/v1",
@@ -151,7 +172,10 @@ class QueryEngine:
             }
         )
 
+        logger.info("🗄️  Setting up SQL database connection...")
         self.db = LoggingSQLDatabase(self.engine)
+        
+        logger.info("🛠️  Creating SQL toolkit and agent...")
         toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
         # Pass handle_parsing_errors=True so that the agent can retry when
         # the LLM returns malformed output instead of raising an exception.
@@ -162,7 +186,7 @@ class QueryEngine:
             agent_executor_kwargs={"handle_parsing_errors": True},
         )
 
-        logger.info(f"Using OpenRouter with model: {llm_model}")
+        logger.info(f"✅ QueryEngine ready! Using OpenRouter with model: {llm_model}")
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -171,15 +195,22 @@ class QueryEngine:
     def ask(self, nl_query: str, progress_callback: Optional[Callable[[str, str, int], None]] = None) -> Dict[str, Any]:
         """Doğal dil sorusunu LangChain SQL ajanına ilet."""
         
+        logger.info(f"❓ Processing natural language query: {nl_query[:100]}...")
+        
         # Setup progress callback if provided
         callbacks = []
         if progress_callback:
             callbacks.append(ProgressCallbackHandler(progress_callback))
 
+        logger.info("🚀 Starting LangChain agent execution...")
         result = self.agent.invoke({"input": nl_query}, config={"callbacks": callbacks})
         answer = result.get("output", "") if isinstance(result, dict) else str(result)
 
         rows = getattr(self.db, "last_result", [])
+        
+        logger.info(f"📈 Query completed! Retrieved {len(rows)} rows")
+        if hasattr(self.db, "last_query"):
+            logger.info(f"🔍 SQL Query: {self.db.last_query}")
 
         return {
             "answer": answer,

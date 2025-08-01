@@ -80,6 +80,12 @@ class AppConfig(BaseSettings):
     CHART_WIDTH: int = Field(800, env="CHART_WIDTH")
     CHART_HEIGHT: int = Field(400, env="CHART_HEIGHT")
 
+    # ---------------------------------------------------------- #
+    # Logging configuration
+    # ---------------------------------------------------------- #
+    LOG_LEVEL: str = Field("DEBUG", env="LOG_LEVEL")
+    SHOW_PROGRESS_LOGS: bool = Field(True, env="SHOW_PROGRESS_LOGS")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

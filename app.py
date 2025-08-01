@@ -19,15 +19,25 @@ def create_app() -> Flask:
     """Flask application factory"""
     app = Flask(__name__)
 
-    # Configure logging once
+    # Load configuration first
+    config = AppConfig()
+    app.config.update(config.model_dump())
+
+    # Configure logging with more detailed format for progress tracking
     if not logging.getLogger().handlers:
         logging.basicConfig(
-            level=logging.INFO,  # Changed from DEBUG to INFO for cleaner output
+            level=getattr(logging, config.LOG_LEVEL.upper()),
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%H:%M:%S"
         )
+    
+    # Add a custom logger for application events
+    app_logger = logging.getLogger("LangChain-SQL-Agent")
+    app_logger.info("🚀 Starting LangChain SQL Agent application...")
+    app_logger.info(f"📊 Using model: {config.OPENROUTER_MODEL}")
+    app_logger.info(f"🗂️  Vector storage: {config.VECTOR_STORE_PATH}")
 
     # Load configuration
-    config = AppConfig()
     app.config.update(config.model_dump())
 
     # Register blueprints
