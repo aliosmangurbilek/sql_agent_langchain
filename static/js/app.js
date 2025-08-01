@@ -1,4 +1,3 @@
-// DOM Elements
 const dbUriInput = document.getElementById('db-uri');
 const modelSelect = document.getElementById('model-select');
 const questionInput = document.getElementById('question');
@@ -10,6 +9,14 @@ const chartOutput = document.getElementById('chart-output');
 const loadingDiv = document.getElementById('loading');
 const errorDiv = document.getElementById('error');
 const themeToggle = document.getElementById('theme-toggle');
+
+// Progress elements
+const progressContainer = document.getElementById('progress-container');
+const progressTitle = document.getElementById('progress-title');
+const progressPercentage = document.getElementById('progress-percentage');
+const progressFill = document.getElementById('progress-fill');
+const progressMessage = document.getElementById('progress-message');
+const progressSteps = document.getElementById('progress-steps');
 
 // Tab functionality
 const tabBtns = document.querySelectorAll('.tab-btn');
@@ -98,10 +105,96 @@ function switchTab(tabName) {
     });
 }
 
-function showLoading(show = true) {
+function showLoading(show = true, message = "Processing...") {
+    const loadingSpan = loadingDiv.querySelector('span');
+    if (loadingSpan) {
+        loadingSpan.textContent = message;
+    }
     loadingDiv.classList.toggle('hidden', !show);
     runQueryBtn.disabled = show;
     runChartBtn.disabled = show;
+}
+
+function hideLoading() {
+    showLoading(false);
+}
+
+function showProgress(show = true) {
+    progressContainer.classList.toggle('hidden', !show);
+    if (!show) {
+        resetProgress();
+    }
+}
+
+function updateProgress(step, message, progress, isError = false) {
+    if (isError) {
+        progressTitle.textContent = "Error occurred";
+        progressMessage.textContent = message;
+        progressFill.style.width = "100%";
+        progressFill.style.background = "#dc3545";
+        progressPercentage.textContent = "Error";
+        return;
+    }
+
+    progressTitle.textContent = getStepTitle(step);
+    progressMessage.textContent = message;
+    progressFill.style.width = progress + "%";
+    progressPercentage.textContent = progress + "%";
+    
+    addProgressStep(step, message, progress);
+}
+
+function resetProgress() {
+    progressFill.style.width = "0%";
+    progressFill.style.background = "linear-gradient(90deg, #667eea 0%, #764ba2 100%)";
+    progressPercentage.textContent = "0%";
+    progressSteps.innerHTML = "";
+}
+
+function getStepTitle(step) {
+    const titles = {
+        'start': 'Starting Process...',
+        'init': 'Initializing...',
+        'llm_start': 'AI Processing...',
+        'embedding': 'Database Analysis...',
+        'query_gen': 'Creating SQL...',
+        'query_exec': 'Running Query...',
+        'chart_gen': 'Creating Visualization...',
+        'complete': 'Complete!',
+        'error': 'Error'
+    };
+    return titles[step] || 'Processing...';
+}
+
+function addProgressStep(step, message, progress) {
+    const stepElement = document.createElement('div');
+    stepElement.className = 'progress-step';
+    
+    let icon = '';
+    let className = 'pending';
+    
+    if (progress === 100) {
+        className = 'completed';
+        icon = '✓';
+    } else if (progress > 0) {
+        className = 'current';
+        icon = '⏳';
+    } else {
+        icon = '⏸';
+    }
+    
+    stepElement.className += ' ' + className;
+    stepElement.innerHTML = `
+        <span class="progress-step-icon">${icon}</span>
+        <span>${message}</span>
+    `;
+    
+    // Remove any existing step with the same step name
+    const existingSteps = progressSteps.querySelectorAll(`[data-step="${step}"]`);
+    existingSteps.forEach(el => el.remove());
+    
+    stepElement.setAttribute('data-step', step);
+    progressSteps.appendChild(stepElement);
 }
 
 function showError(message) {
@@ -149,15 +242,71 @@ function executeQuery() {
         return;
     }
 
-    showLoading();
-    fetchJson('/api/query', {
+    hideError();
+    showProgress(true);
+    runQueryBtn.disabled = true;
+    runChartBtn.disabled = true;
+
+    const eventSource = new EventSource('/api/query-stream', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ db_uri: dbUri, question: question, model: model })
+    });
+
+    // For EventSource, we need to use fetch for POST data and then connect to SSE
+    fetch('/api/query-stream', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
         body: JSON.stringify({ db_uri: dbUri, question: question, model: model })
     })
-    .then(handleQueryResponse)
-    .catch(handleError)
-    .finally(hideLoading);
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        function readStream() {
+            return reader.read().then(({ done, value }) => {
+                if (done) {
+                    showProgress(false);
+                    runQueryBtn.disabled = false;
+                    runChartBtn.disabled = false;
+                    return;
+                }
+
+                const chunk = decoder.decode(value);
+                const lines = chunk.split('\n');
+                
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.slice(6));
+                            handleProgressUpdate(data, 'query');
+                        } catch (e) {
+                            console.error('Failed to parse SSE data:', e);
+                        }
+                    }
+                }
+
+                return readStream();
+            });
+        }
+
+        return readStream();
+    })
+    .catch(error => {
+        console.error('Stream error:', error);
+        showError(error.message);
+        showProgress(false);
+        runQueryBtn.disabled = false;
+        runChartBtn.disabled = false;
+    });
 }
 
 function generateChart() {
@@ -170,15 +319,82 @@ function generateChart() {
         return;
     }
 
-    showLoading();
-    fetchJson('/api/chart', {
+    hideError();
+    showProgress(true);
+    runQueryBtn.disabled = true;
+    runChartBtn.disabled = true;
+
+    fetch('/api/chart-stream', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+        },
         body: JSON.stringify({ db_uri: dbUri, question: question, model: model })
     })
-    .then(handleChartResponse)
-    .catch(handleError)
-    .finally(hideLoading);
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        function readStream() {
+            return reader.read().then(({ done, value }) => {
+                if (done) {
+                    showProgress(false);
+                    runQueryBtn.disabled = false;
+                    runChartBtn.disabled = false;
+                    return;
+                }
+
+                const chunk = decoder.decode(value);
+                const lines = chunk.split('\n');
+                
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.slice(6));
+                            handleProgressUpdate(data, 'chart');
+                        } catch (e) {
+                            console.error('Failed to parse SSE data:', e);
+                        }
+                    }
+                }
+
+                return readStream();
+            });
+        }
+
+        return readStream();
+    })
+    .catch(error => {
+        console.error('Stream error:', error);
+        showError(error.message);
+        showProgress(false);
+        runQueryBtn.disabled = false;
+        runChartBtn.disabled = false;
+    });
+}
+
+function handleProgressUpdate(data, type) {
+    const { step, message, progress } = data;
+    
+    if (step === 'error') {
+        updateProgress(step, message, progress, true);
+        showError(message);
+        return;
+    }
+    
+    updateProgress(step, message, progress);
+    
+    if (step === 'complete' && data.data) {
+        if (type === 'query') {
+            handleQueryResponse(data.data);
+        } else if (type === 'chart') {
+            handleChartResponse(data.data);
+        }
+    }
 }
 
 function handleQueryResponse(data) {

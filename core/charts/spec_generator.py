@@ -77,7 +77,7 @@ def generate_chart_spec(
 
     field_types = _infer_field_types(data)
     chart_type, enc = _choose_chart(field_types, data)
-    spec = _build_spec(chart_type, enc, question, sql)
+    spec = _build_spec(chart_type, enc, question, sql, data)
 
     # İsteğe bağlı LLM post-processing
     if use_llm and _OPENAI_READY:
@@ -103,12 +103,25 @@ def _infer_field_types(rows: List[Dict[str, Any]]) -> Dict[str, str]:
     -------
     {field_name: "quantitative"|"temporal"|"nominal"}
     """
+    if not rows:
+        return {}
+    
     sample = rows[0]
     types: Dict[str, str] = {}
     for col, val in sample.items():
-        if _looks_temporal(col, val):
+        # Check if field has non-null values across multiple rows
+        non_null_values = [row.get(col) for row in rows[:min(10, len(rows))] if row.get(col) is not None]
+        
+        if not non_null_values:
+            types[col] = "nominal"  # Default for empty/null fields
+            continue
+            
+        # Use first non-null value for type inference
+        sample_val = non_null_values[0]
+        
+        if _looks_temporal(col, sample_val):
             types[col] = "temporal"
-        elif _is_numeric(val):
+        elif _is_numeric(sample_val):
             types[col] = "quantitative"
         else:
             types[col] = "nominal"
@@ -150,15 +163,19 @@ def _choose_chart(field_types: Dict[str, str], rows: List[Dict[str, Any]]) -> Tu
 def _rank_numeric_fields(rows: List[Dict[str, Any]], fields: List[str]) -> List[str]:
     variances = {}
     for f in fields:
-        vals = [row[f] for row in rows if isinstance(row.get(f), (int, float))]
-        variances[f] = float(np.var(vals)) if vals else 0.0
+        vals = [row[f] for row in rows if row.get(f) is not None and isinstance(row.get(f), (int, float))]
+        if len(vals) > 1:
+            variances[f] = float(np.var(vals))
+        else:
+            variances[f] = 0.0
     return sorted(fields, key=lambda x: variances[x], reverse=True)
 
 
 def _rank_nominal_fields(rows: List[Dict[str, Any]], fields: List[str]) -> List[str]:
     counts = {}
     for f in fields:
-        counts[f] = len({row[f] for row in rows if f in row})
+        unique_vals = {row[f] for row in rows if f in row and row[f] is not None}
+        counts[f] = len(unique_vals)
     return sorted(fields, key=lambda x: counts[x], reverse=True)
 
 
@@ -174,30 +191,34 @@ def _rank_temporal_fields(rows: List[Dict[str, Any]], fields: List[str]) -> List
                 vals.append(np.datetime64(v))
             except Exception:
                 pass
-        if vals:
+        if len(vals) > 1:
             ranges[f] = float((max(vals) - min(vals)).astype('timedelta64[s]') / np.timedelta64(1, 's'))
         else:
             ranges[f] = 0.0
     return sorted(fields, key=lambda x: ranges[x], reverse=True)
 
 
-def _build_spec(chart: str, enc: Dict[str, Any], title: str, sql: str) -> Dict[str, Any]:
+def _build_spec(chart: str, enc: Dict[str, Any], title: str, sql: str, data: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Vega-Lite spec üret."""
     if chart == "table":
-        # Simple bar-wrapped table
+        # Create a proper table visualization using concatenated text marks
+        columns = enc["columns"][:5]  # Limit to first 5 columns to avoid clutter
+        
         return {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
             "description": title,
-            "data": {"name": "table"},  # front-end inline_data embed edecek
-            "mark": "text",
-            "encoding": {
-                "row": {"field": enc["columns"][0], "type": "nominal"},
-                "column": {"field": enc["columns"][1], "type": "nominal"}
-                if len(enc["columns"]) > 1
-                else {"value": ""},
-                "text": {"field": enc["columns"][0], "type": "nominal"},
+            "data": {"values": data},
+            "mark": {
+                "type": "rect",
+                "stroke": "#ccc",
+                "strokeWidth": 1
             },
-            "config": {"view": {"stroke": "transparent"}},
+            "encoding": {
+                "x": {"field": columns[0], "type": "nominal", "axis": {"title": columns[0]}},
+                "y": {"field": columns[1] if len(columns) > 1 else columns[0], "type": "nominal", "axis": {"title": columns[1] if len(columns) > 1 else columns[0]}},
+                "color": {"value": "#f0f0f0"},
+                "tooltip": [{"field": col, "type": "nominal"} for col in columns]
+            },
             "title": title,
             "usermeta": {"sql": sql},
         }
@@ -207,7 +228,7 @@ def _build_spec(chart: str, enc: Dict[str, Any], title: str, sql: str) -> Dict[s
     return {
         "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
         "description": title,
-        "data": {"name": "table"},
+        "data": {"values": data},
         "mark": mark,
         "encoding": {
             "x": {"field": enc["x"], "type": _vl_type(enc["x"], chart)},
