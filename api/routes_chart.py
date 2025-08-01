@@ -16,6 +16,9 @@ Response:
   "rowcount": 42,
   "vega_spec": { ... }          # Vega-Lite 5 JSON
 }
+
+Not: Eğer ortamda OPENAI_API_KEY varsa ve LLM destekli grafik isteniyorsa,
+otomatik olarak OpenAI API ile daha iyi grafik spec'i üretilir.
 """
 
 from __future__ import annotations
@@ -50,6 +53,8 @@ def run_chart():
         *veya* ayrı `/api/query` çağrısından aldığı veri ile aynı yapıdır.
       • `vega_spec` içindeki `"data": {"name": "table"}`
         ise front-end uygun şekilde embed edecektir.
+
+    Not: Ortamda OPENAI_API_KEY varsa, chart üretiminde OpenAI LLM kullanılır.
     """
     if not request.is_json:
         raise BadRequest("Content-Type must be application/json")
@@ -71,6 +76,7 @@ def run_chart():
             question=question,
             sql=result["sql"],
             data=result["data"],
+            use_llm=True,  # OpenAI API key varsa LLM ile üret
         )
 
         return (

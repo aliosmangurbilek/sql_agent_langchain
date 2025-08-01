@@ -14,6 +14,13 @@ Heuristikler
 
 `use_llm=True` parametresi verilirse (ve ortamda OPENAI_API_KEY varsa)
 heuristik çıktıyı prompt'layarak ChatGPT'den iyileştirilmiş spec alınır.
+OPENAI_API_KEY ortam değişkeni ayarlıysa, OpenAI API ile daha iyi grafik
+spec'i üretmek için LLM kullanılır.
+
+Kullanım:
+---------
+generate_chart_spec(..., use_llm=True)  # OpenAI API key ile LLM destekli
+generate_chart_spec(..., use_llm=False) # Sadece heuristik
 """
 
 from __future__ import annotations
@@ -224,7 +231,7 @@ def _llm_refine_spec(spec: Dict[str, Any], question: str) -> Dict[str, Any]:
     """OpenAI ile heuristik spec'i iyileştir (ör. renk, sorting, axis)."""
     if ChatOpenAI is None:
         return spec
-    llm = ChatOpenAI(temperature=0.0, model="openai/gpt-4o-mini-2024-07-18")
+    llm = ChatOpenAI(temperature=0.0, model="gpt-4o-mini-2024-07-18")
 
     system = (
         "You are a data visualisation expert. "
