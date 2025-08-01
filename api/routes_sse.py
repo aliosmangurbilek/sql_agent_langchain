@@ -11,7 +11,9 @@ from __future__ import annotations
 import json
 import logging
 import time
+import threading
 from typing import Any, Dict, Generator
+from queue import Queue
 
 from flask import Blueprint, request, Response
 from werkzeug.exceptions import BadRequest
@@ -21,6 +23,59 @@ from core.charts.spec_generator import generate_chart_spec
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("sse", __name__, url_prefix="/api")
+
+
+class ProgressTracker:
+    """Thread-safe progress tracker for SSE updates."""
+    
+    def __init__(self):
+        self.progress_queue = Queue()
+        self.is_complete = False
+        self.error = None
+        self.result = None
+        
+    def update(self, step: str, message: str, progress: int, data: Any = None):
+        """Add a progress update to the queue."""
+        self.progress_queue.put({
+            "step": step,
+            "message": message,
+            "progress": progress,
+            "timestamp": time.time(),
+            "data": data
+        })
+        
+        if step == "complete":
+            self.is_complete = True
+            self.result = data
+        elif step == "error":
+            self.error = message
+            self.is_complete = True
+            
+    def get_updates(self) -> Generator[Dict, None, None]:
+        """Generator that yields progress updates."""
+        while not self.is_complete:
+            try:
+                # Wait for up to 1 second for a new update
+                update = self.progress_queue.get(timeout=1.0)
+                yield update
+                self.progress_queue.task_done()
+            except:
+                # Timeout - yield a heartbeat to keep connection alive
+                yield {
+                    "step": "heartbeat",
+                    "message": "Processing...",
+                    "progress": -1,
+                    "timestamp": time.time()
+                }
+                
+        # Yield any remaining updates
+        while not self.progress_queue.empty():
+            try:
+                update = self.progress_queue.get_nowait()
+                yield update
+                self.progress_queue.task_done()
+            except:
+                break
 
 
 def emit_progress(step: str, message: str, progress: int = 0, data: Any = None) -> str:
@@ -37,62 +92,52 @@ def emit_progress(step: str, message: str, progress: int = 0, data: Any = None) 
     return f"data: {json.dumps(event_data)}\n\n"
 
 
-def process_query_with_progress(db_uri: str, question: str, model: str) -> Generator[str, None, None]:
-    """Process a query with progress updates."""
+def execute_query_in_background(db_uri: str, question: str, model: str, tracker: ProgressTracker):
+    """Execute query in a background thread with progress tracking."""
     try:
-        yield emit_progress("start", "Starting query processing...", 0)
+        tracker.update("start", "Starting query processing...", 0)
         
         # Step 1: Initialize query engine
-        yield emit_progress("init", "Initializing query engine...", 10)
+        tracker.update("init", "Initializing query engine...", 10)
         qe = QueryEngine(db_uri, llm_model=model)
         
-        # Step 2: Start LLM processing
-        yield emit_progress("llm_start", "LLM is analyzing your question...", 20)
+        # Step 2: Create progress callback
+        def progress_callback(step: str, message: str, progress: int):
+            tracker.update(step, message, progress)
         
-        # Step 3: Embedding search (simulated - this happens inside LangChain)
-        yield emit_progress("embedding", "Performing embedding search on database schema...", 40)
-        time.sleep(0.5)  # Small delay to show progress
+        # Step 3: Execute query
+        tracker.update("agent_start", "Starting AI agent...", 20)
+        result = qe.ask(question, progress_callback=progress_callback)
         
-        # Step 4: Query generation
-        yield emit_progress("query_gen", "Generating SQL query...", 60)
-        
-        # Step 5: Execute query
-        yield emit_progress("query_exec", "Executing query on database...", 80)
-        result = qe.ask(question)
-        
-        # Step 6: Complete
-        yield emit_progress("complete", "Query completed successfully!", 100, result)
+        # Step 4: Complete
+        tracker.update("complete", "Query completed successfully!", 100, result)
         
     except Exception as e:
         logger.exception("Query processing failed")
-        yield emit_progress("error", f"Error: {str(e)}", -1)
+        tracker.update("error", f"Error: {str(e)}", -1)
 
 
-def process_chart_with_progress(db_uri: str, question: str, model: str) -> Generator[str, None, None]:
-    """Process a chart generation with progress updates."""
+def execute_chart_in_background(db_uri: str, question: str, model: str, tracker: ProgressTracker):
+    """Execute chart generation in a background thread with progress tracking."""
     try:
-        yield emit_progress("start", "Starting chart generation...", 0)
+        tracker.update("start", "Starting chart generation...", 0)
         
         # Step 1: Initialize query engine
-        yield emit_progress("init", "Initializing query engine...", 10)
+        tracker.update("init", "Initializing query engine...", 10)
         qe = QueryEngine(db_uri, llm_model=model)
         
-        # Step 2: Start LLM processing
-        yield emit_progress("llm_start", "LLM is analyzing your question...", 20)
+        # Step 2: Create progress callback
+        def progress_callback(step: str, message: str, progress: int):
+            # Adjust progress for chart generation (reserve 15% for chart creation)
+            adjusted_progress = min(progress * 0.85, 85)
+            tracker.update(step, message, int(adjusted_progress))
         
-        # Step 3: Embedding search
-        yield emit_progress("embedding", "Performing embedding search on database schema...", 30)
-        time.sleep(0.5)
+        # Step 3: Execute query
+        tracker.update("agent_start", "Starting AI agent...", 20)
+        result = qe.ask(question, progress_callback=progress_callback)
         
-        # Step 4: Query generation
-        yield emit_progress("query_gen", "Generating SQL query...", 50)
-        
-        # Step 5: Execute query
-        yield emit_progress("query_exec", "Executing query on database...", 70)
-        result = qe.ask(question)
-        
-        # Step 6: Chart generation
-        yield emit_progress("chart_gen", "Generating chart specification...", 85)
+        # Step 4: Chart generation
+        tracker.update("chart_gen", "Generating chart specification...", 90)
         vega_spec = generate_chart_spec(
             question=question,
             sql=result["sql"],
@@ -100,13 +145,59 @@ def process_chart_with_progress(db_uri: str, question: str, model: str) -> Gener
             use_llm=True,
         )
         
-        # Step 7: Complete
+        # Step 5: Complete
         final_result = {**result, "vega_spec": vega_spec}
-        yield emit_progress("complete", "Chart generated successfully!", 100, final_result)
+        tracker.update("complete", "Chart generated successfully!", 100, final_result)
         
     except Exception as e:
         logger.exception("Chart generation failed")
-        yield emit_progress("error", f"Error: {str(e)}", -1)
+        tracker.update("error", f"Error: {str(e)}", -1)
+
+
+def process_query_with_progress(db_uri: str, question: str, model: str) -> Generator[str, None, None]:
+    """Process a query with progress updates using background thread."""
+    tracker = ProgressTracker()
+    
+    # Start background thread
+    thread = threading.Thread(
+        target=execute_query_in_background,
+        args=(db_uri, question, model, tracker)
+    )
+    thread.daemon = True
+    thread.start()
+    
+    # Stream progress updates
+    for update in tracker.get_updates():
+        if update["step"] != "heartbeat":  # Don't emit heartbeat messages
+            yield emit_progress(
+                update["step"],
+                update["message"],
+                update["progress"],
+                update.get("data")
+            )
+
+
+def process_chart_with_progress(db_uri: str, question: str, model: str) -> Generator[str, None, None]:
+    """Process a chart generation with progress updates using background thread."""
+    tracker = ProgressTracker()
+    
+    # Start background thread
+    thread = threading.Thread(
+        target=execute_chart_in_background,
+        args=(db_uri, question, model, tracker)
+    )
+    thread.daemon = True
+    thread.start()
+    
+    # Stream progress updates
+    for update in tracker.get_updates():
+        if update["step"] != "heartbeat":  # Don't emit heartbeat messages
+            yield emit_progress(
+                update["step"],
+                update["message"],
+                update["progress"],
+                update.get("data")
+            )
 
 
 @bp.route("/query-stream", methods=["POST"])

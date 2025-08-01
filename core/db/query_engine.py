@@ -11,7 +11,7 @@ olduğunda tablolari listeler, şemayı sorar ve sorguyu çalıştırır.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Callable, Optional
 
 import os
 import sqlalchemy as sa
@@ -20,8 +20,54 @@ from langchain_community.utilities.sql_database import SQLDatabase
 from langchain_community.utilities.sql_database import truncate_word
 from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
+from langchain.callbacks.base import BaseCallbackHandler
+from langchain.schema import LLMResult
+from langchain.schema.agent import AgentAction, AgentFinish
 
 logger = logging.getLogger(__name__)
+
+
+class ProgressCallbackHandler(BaseCallbackHandler):
+    """Custom callback handler to track LangChain agent progress."""
+    
+    def __init__(self, progress_callback: Callable[[str, str, int], None]):
+        self.progress_callback = progress_callback
+        self.current_step = 0
+        self.total_steps = 6  # Estimated total steps
+        
+    def on_llm_start(self, serialized: Dict[str, Any], prompts: list[str], **kwargs) -> None:
+        """Called when LLM starts generating."""
+        self.current_step += 1
+        progress = min(30 + (self.current_step * 10), 70)
+        self.progress_callback("llm_thinking", "AI is analyzing your question...", progress)
+        
+    def on_llm_end(self, response: LLMResult, **kwargs) -> None:
+        """Called when LLM finishes generating."""
+        self.current_step += 1
+        progress = min(40 + (self.current_step * 8), 75)
+        self.progress_callback("llm_response", "AI has generated a response...", progress)
+        
+    def on_agent_action(self, action: AgentAction, **kwargs) -> None:
+        """Called when agent is about to execute an action."""
+        tool_name = action.tool
+        self.current_step += 1
+        
+        if "sql_db_list_tables" in tool_name.lower():
+            progress = 45
+            self.progress_callback("db_schema", "Exploring database schema...", progress)
+        elif "sql_db_schema" in tool_name.lower():
+            progress = 55
+            self.progress_callback("table_schema", "Analyzing table structure...", progress)
+        elif "sql_db_query" in tool_name.lower():
+            progress = 70
+            self.progress_callback("sql_execution", "Executing SQL query...", progress)
+        else:
+            progress = min(50 + (self.current_step * 5), 80)
+            self.progress_callback("agent_action", f"Executing: {tool_name}", progress)
+            
+    def on_agent_finish(self, finish: AgentFinish, **kwargs) -> None:
+        """Called when agent finishes."""
+        self.progress_callback("agent_complete", "Agent execution completed!", 90)
 
 
 class LoggingSQLDatabase(SQLDatabase):
@@ -122,10 +168,15 @@ class QueryEngine:
     # Public API
     # ------------------------------------------------------------------ #
 
-    def ask(self, nl_query: str) -> Dict[str, Any]:
+    def ask(self, nl_query: str, progress_callback: Optional[Callable[[str, str, int], None]] = None) -> Dict[str, Any]:
         """Doğal dil sorusunu LangChain SQL ajanına ilet."""
+        
+        # Setup progress callback if provided
+        callbacks = []
+        if progress_callback:
+            callbacks.append(ProgressCallbackHandler(progress_callback))
 
-        result = self.agent.invoke({"input": nl_query})
+        result = self.agent.invoke({"input": nl_query}, config={"callbacks": callbacks})
         answer = result.get("output", "") if isinstance(result, dict) else str(result)
 
         rows = getattr(self.db, "last_result", [])
