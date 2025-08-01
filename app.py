@@ -22,7 +22,7 @@ def create_app() -> Flask:
     # Configure logging once
     if not logging.getLogger().handlers:
         logging.basicConfig(
-            level=logging.DEBUG,
+            level=logging.INFO,  # Changed from DEBUG to INFO for cleaner output
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         )
 
@@ -54,4 +54,5 @@ def create_app() -> Flask:
 
 if __name__ == "__main__":
     app = create_app()
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # Removed debug=True for production-ready setup
+    app.run(host='0.0.0.0', port=5000)

@@ -38,8 +38,8 @@ class AppConfig(BaseSettings):
     # ---------------------------------------------------------- #
     # Flask / genel
     # ---------------------------------------------------------- #
-    FLASK_ENV: str = Field("development", env="FLASK_ENV")
-    FLASK_DEBUG: bool = Field(True, env="FLASK_DEBUG")
+    FLASK_ENV: str = Field("production", env="FLASK_ENV")  # Changed default to production
+    FLASK_DEBUG: bool = Field(False, env="FLASK_DEBUG")    # Changed default to False
 
     # ---------------------------------------------------------- #
     # OpenAI

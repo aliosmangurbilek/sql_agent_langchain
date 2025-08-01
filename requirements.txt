@@ -15,13 +15,13 @@ sqlglot
 psycopg2-binary
 pgvector
 scann
+faiss-cpu  # Added missing FAISS dependency
 sentence-transformers
 # Configuration and utilities
 pydantic
 pydantic-settings
 python-dotenv
-requests
-requests
+requests  # Removed duplicate
 
 # Chart and data visualization dependencies
 vega-datasets

@@ -524,7 +524,7 @@ function loadSampleQuestions() {
 async function checkHealth() {
     try {
         const data = await fetchJson('/api/healthz');
-        console.log('Health check:', data);
+        // Health check completed - removed console.log for cleaner output
         return data.status === 'ok';
     } catch (error) {
         console.error('Health check failed:', error);

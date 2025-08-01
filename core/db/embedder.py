@@ -18,7 +18,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from .introspector import get_metadata
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.DEBUG)
+# Removed redundant logging.basicConfig - this should be configured at app level
 
 # ------------------------------------------------------------
 # Desteklenen vektör depoları

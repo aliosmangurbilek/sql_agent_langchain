@@ -84,8 +84,8 @@ def generate_chart_spec(
         try:
             spec = _llm_refine_spec(spec, question)
         except Exception:  # noqa: BLE001
-            # LLM başarısızsa heuristik spec ile devam
-            pass
+            # LLM başarısızsa heuristik spec ile devam - no action needed
+            pass  # This pass is intentional for exception handling
 
     return spec
 
