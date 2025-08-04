@@ -18,7 +18,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from .introspector import get_metadata
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.DEBUG)
+
 
 # ------------------------------------------------------------
 # Desteklenen vektör depoları
@@ -103,20 +103,23 @@ class DBEmbedder:
     def _lock_path(self) -> Path:
         return self.store_path.with_suffix(".lock")
 
+    def _load_local_vector(self, path: Path):
+        """Vektör deposunu yerelden yüklemek için sarmalayıcı."""
+        Vector = self._vector_cls()
+        return Vector.load_local(
+            str(path),
+            self._embeddings,
+            allow_dangerous_deserialization=True,
+        )
+
     # --------------------------------------------------------
     # Depo oluştur / yükle
     # --------------------------------------------------------
     def ensure_store(self, *, force: bool = False):
-        Vector = self._vector_cls()
-
         with FileLock(str(self._lock_path())):
             if self.store_path.exists() and not force:
                 try:
-                    return Vector.load_local(
-                        str(self.store_path),
-                        self._embeddings,
-                        allow_dangerous_deserialization=self.backend == "scann",
-                    )
+                    return self._load_local_vector(self.store_path)
                 except Exception as exc:
                     logger.warning("Bozuk indeks tespit edildi (%s) – yeniden inşa", exc)
 
@@ -152,11 +155,7 @@ class DBEmbedder:
             _patch_scann_asset_paths(path / "index.scann")
 
         # bütünlük testi
-        Vector.load_local(
-            str(path),
-            self._embeddings,
-            allow_dangerous_deserialization=self.backend == "scann",
-        )
+        self._load_local_vector(path)
         return store
 
     # --------------------------------------------------------

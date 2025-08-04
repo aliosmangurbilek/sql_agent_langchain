@@ -24,6 +24,8 @@ from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema import LLMResult
 from langchain.schema.agent import AgentAction, AgentFinish
 
+from core.db.embedder import DBEmbedder
+
 logger = logging.getLogger(__name__)
 
 
@@ -133,6 +135,8 @@ class QueryEngine:
         db_uri: str,
         llm_model: str = "deepseek/deepseek-chat",
     ) -> None:
+        self.db_uri = db_uri
+        self.llm_model = llm_model
         self.engine = sa.create_engine(db_uri)
 
         # OpenRouter için ChatOpenAI yapılandırması
@@ -151,16 +155,11 @@ class QueryEngine:
             }
         )
 
-        self.db = LoggingSQLDatabase(self.engine)
-        toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
-        # Pass handle_parsing_errors=True so that the agent can retry when
-        # the LLM returns malformed output instead of raising an exception.
-        self.agent = create_sql_agent(
-            llm=self.llm,
-            toolkit=toolkit,
-            verbose=False,
-            agent_executor_kwargs={"handle_parsing_errors": True},
-        )
+        # Her veritabanı için izole bir DBEmbedder oluştur
+        # URI'den veritabanı adını çıkararak doğru vektör deposunu hedeflemesini sağla
+        db_name = sa.engine.url.make_url(db_uri).database
+        self.embedder = DBEmbedder(engine=self.engine, db_name=db_name)
+        self.embedder.ensure_store()
 
         logger.info(f"Using OpenRouter with model: {llm_model}")
 
@@ -176,15 +175,54 @@ class QueryEngine:
         if progress_callback:
             callbacks.append(ProgressCallbackHandler(progress_callback))
 
-        result = self.agent.invoke({"input": nl_query}, config={"callbacks": callbacks})
+        # Anlamsal arama ile ilgili tabloları bul
+        hits = self.embedder.similarity_search(nl_query, k=5) # Daha fazla sonuç alıp filtreleyelim
+        qualified_table_names = [hit["table"] for hit in hits if hit.get("table")]
+
+        # Sistem şemalarını (örn: information_schema) filtrele
+        user_tables = [
+            t for t in qualified_table_names
+            if t and not t.startswith("information_schema.")
+        ]
+
+        logger.info(f"Sorgu için ilgili tablolar bulundu: {user_tables}")
+
+        schema_name = None
+        unqualified_table_names = []
+
+        if user_tables:
+            # Şema ve tablo adlarını ayır
+            # Not: Bu basit mantık, tüm tabloların aynı şemada olduğunu varsayar.
+            schemas = {t.split('.')[0] for t in user_tables if '.' in t}
+            if schemas:
+                schema_name = list(schemas)[0]
+
+            unqualified_table_names = [t.split('.')[1] if '.' in t else t for t in user_tables]
+
+        # Sadece ilgili tabloları içeren bir SQLDatabase nesnesi oluştur
+        db = LoggingSQLDatabase.from_uri(
+            self.db_uri,
+            schema=schema_name,
+            include_tables=unqualified_table_names,
+            sample_rows_in_table_info=3,
+        )
+
+        toolkit = SQLDatabaseToolkit(db=db, llm=self.llm)
+        agent = create_sql_agent(
+            llm=self.llm,
+            toolkit=toolkit,
+            verbose=False,
+            agent_executor_kwargs={"handle_parsing_errors": True},
+        )
+
+        result = agent.invoke({"input": nl_query}, config={"callbacks": callbacks})
         answer = result.get("output", "") if isinstance(result, dict) else str(result)
 
-        rows = getattr(self.db, "last_result", [])
+        rows = getattr(db, "last_result", [])
 
         return {
             "answer": answer,
-            "sql": getattr(self.db, "last_query", ""),
+            "sql": getattr(db, "last_query", ""),
             "data": rows,
             "rowcount": len(rows),
         }
-

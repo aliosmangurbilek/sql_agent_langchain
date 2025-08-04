@@ -20,6 +20,7 @@ from werkzeug.exceptions import BadRequest
 
 from core.db.query_engine import QueryEngine
 from core.charts.spec_generator import generate_chart_spec
+from api.utils import CustomJSONEncoder
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("sse", __name__, url_prefix="/api")
@@ -89,7 +90,7 @@ def emit_progress(step: str, message: str, progress: int = 0, data: Any = None) 
     if data is not None:
         event_data["data"] = data
     
-    return f"data: {json.dumps(event_data)}\n\n"
+    return f"data: {json.dumps(event_data, cls=CustomJSONEncoder)}\n\n"
 
 
 def execute_query_in_background(db_uri: str, question: str, model: str, tracker: ProgressTracker):
