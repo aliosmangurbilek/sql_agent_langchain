@@ -22,7 +22,6 @@ Her satırda aşağıdaki alanlar sağlanır::
 
 Bu çıktı, DBEmbedder tarafında şema‑RAG için kullanılır.
 """
-from __future__ import annotations
 
 from typing import List, Dict, Any
 from decimal import Decimal

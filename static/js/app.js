@@ -1,4 +1,13 @@
+// Main Application JavaScript
+// Core functionality and initialization
+
+// Global references to DOM elements
 const dbUriInput = document.getElementById('db-uri');
+const baseDbUriInput = document.getElementById('base-db-uri');
+const databaseSwitcher = document.getElementById('database-switcher');
+const switchDbBtn = document.getElementById('switch-db-btn');
+const saveBaseUriBtn = document.getElementById('save-base-uri-btn');
+const refreshStatusBtn = document.getElementById('refresh-status-btn');
 const modelSelect = document.getElementById('model-select');
 const questionInput = document.getElementById('question');
 const runQueryBtn = document.getElementById('run-query');
@@ -6,8 +15,6 @@ const runChartBtn = document.getElementById('run-chart');
 const sqlOutput = document.getElementById('sql-output');
 const dataOutput = document.getElementById('data-output');
 const chartOutput = document.getElementById('chart-output');
-const loadingDiv = document.getElementById('loading');
-const errorDiv = document.getElementById('error');
 const themeToggle = document.getElementById('theme-toggle');
 
 // Progress elements
@@ -22,17 +29,30 @@ const progressSteps = document.getElementById('progress-steps');
 const tabBtns = document.querySelectorAll('.tab-btn');
 const tabPanes = document.querySelectorAll('.tab-pane');
 
+// Global module instances
+let workerManager;
+let schemaLogger;
+
 // Initialize the application
 document.addEventListener('DOMContentLoaded', function() {
-    // Load saved DB URI from localStorage
+    // Initialize modules
+    workerManager = new WorkerManager();
+    schemaLogger = new SchemaLogger();
+    
+    // Load saved configuration from localStorage
     const savedDbUri = localStorage.getItem('dbUri');
+    const savedBaseDbUri = localStorage.getItem('baseDbUri');
+    
     if (savedDbUri) {
         dbUriInput.value = savedDbUri;
+    }
+    if (savedBaseDbUri) {
+        baseDbUriInput.value = savedBaseDbUri;
     }
 
     // Apply saved theme
     const savedTheme = localStorage.getItem('theme') || 'light';
-    setTheme(savedTheme);
+    UIUtils.setTheme(savedTheme);
     
     // Setup event listeners
     setupEventListeners();
@@ -47,49 +67,81 @@ document.addEventListener('DOMContentLoaded', function() {
 function setupEventListeners() {
     // Tab switching
     tabBtns.forEach(btn => {
-        btn.addEventListener('click', () => switchTab(btn.dataset.tab));
-    });
-
-    // Save DB URI to localStorage
-    dbUriInput.addEventListener('change', () => {
-        localStorage.setItem('dbUri', dbUriInput.value);
-    });
-    // Save selected model to localStorage
-    modelSelect.addEventListener('change', () => {
-        localStorage.setItem('selectedModel', modelSelect.value);
-    });
-
-    // Refresh models button
-    const refreshModelsBtn = document.getElementById('refresh-models-btn');
-    if (refreshModelsBtn) {
-        refreshModelsBtn.addEventListener('click', () => {
-            refreshModelsBtn.disabled = true;
-            refreshModelsBtn.textContent = '⏳';
-            loadModels().finally(() => {
-                refreshModelsBtn.disabled = false;
-                refreshModelsBtn.textContent = '🔄';
-            });
-        });
-    }
-
-    // Query execution
-    runQueryBtn.addEventListener('click', executeQuery);
-    runChartBtn.addEventListener('click', generateChart);
-
-    // Enter key handling
-    questionInput.addEventListener('keydown', (e) => {
-        if (e.ctrlKey && e.key === 'Enter') {
-            executeQuery();
-        }
+        btn.addEventListener('click', () => UIUtils.switchTab(btn.dataset.tab));
     });
 
     // Theme toggle
-    if (themeToggle) {
-        themeToggle.addEventListener('click', () => {
-            const newTheme = document.body.classList.contains('dark-mode') ? 'light' : 'dark';
-            setTheme(newTheme);
-            localStorage.setItem('theme', newTheme);
-        });
+    themeToggle.addEventListener('click', UIUtils.toggleTheme);
+
+    // Query execution
+    runQueryBtn.addEventListener('click', () => executeQuery(false));
+    runChartBtn.addEventListener('click', () => executeQuery(true));
+
+    // Database URI validation and connection testing
+    dbUriInput.addEventListener('input', function() {
+        const uri = this.value.trim();
+        localStorage.setItem('dbUri', uri);
+        validateDatabaseUri(uri);
+    });
+
+    document.getElementById('test-connection-btn').addEventListener('click', testConnection);
+
+    // Model management
+    const refreshModelsBtn = document.getElementById('refresh-models-btn');
+    if (refreshModelsBtn) {
+        refreshModelsBtn.addEventListener('click', loadModels);
+    }
+
+    // Sample questions
+    document.addEventListener('click', function(e) {
+        if (e.target.classList.contains('sample-question')) {
+            questionInput.value = e.target.textContent;
+            questionInput.focus();
+        }
+    });
+
+    // Database management event listeners
+    saveBaseUriBtn.addEventListener('click', handleSaveBaseUri);
+    switchDbBtn.addEventListener('click', handleSwitchDatabase);
+    refreshStatusBtn.addEventListener('click', () => workerManager.checkWorkerStatus());
+
+    // Base DB URI input
+    baseDbUriInput.addEventListener('input', function() {
+        localStorage.setItem('baseDbUri', this.value.trim());
+    });
+
+    // Enter key handling
+    questionInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && e.ctrlKey) {
+            executeQuery(false);
+        }
+    });
+
+    databaseSwitcher.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            handleSwitchDatabase();
+        }
+    });
+}
+
+// Database management handlers
+function handleSaveBaseUri() {
+    try {
+        const message = workerManager.saveBaseUri(baseDbUriInput.value);
+        UIUtils.showSuccess(message);
+    } catch (error) {
+        UIUtils.showError(error.message);
+    }
+}
+
+async function handleSwitchDatabase() {
+    const dbName = databaseSwitcher.value.trim();
+    try {
+        const result = await workerManager.switchActiveDatabase(dbName);
+        UIUtils.showSuccess(`Database switched to: ${result.activeDb}`);
+        schemaLogger.logDatabaseSwitch(result.activeDb);
+    } catch (error) {
+        UIUtils.showError(error.message);
     }
 }
 
@@ -627,5 +679,274 @@ function setTheme(mode) {
         if (themeToggle) {
             themeToggle.textContent = '🌙 Dark Mode';
         }
+    }
+}
+
+// Utility functions
+function validateDatabaseUri(uri) {
+    return UIUtils.validateDatabaseUri(uri);
+}
+
+function showError(message) {
+    UIUtils.showError(message);
+}
+
+function showLoading(show = true) {
+    UIUtils.showLoading(show);
+}
+
+function switchTab(tabName) {
+    UIUtils.switchTab(tabName);
+}
+
+// Sample questions functionality
+function loadSampleQuestions() {
+    const questions = [
+        "Show me the top 10 customers by revenue",
+        "List all products with low stock levels", 
+        "What are the sales trends for the last 6 months?",
+        "Find customers who haven't purchased in the last year",
+        "Show revenue by category for this quarter"
+    ];
+
+    const questionsContainer = document.createElement('div');
+    questionsContainer.className = 'sample-questions';
+    questionsContainer.innerHTML = `
+        <h4>💡 Sample Questions:</h4>
+        <div class="questions-grid">
+            ${questions.map((q, i) => `
+                <button class="sample-question" title="Click to use this question">
+                    ${q}
+                </button>
+            `).join('')}
+        </div>
+    `;
+
+    // Insert after the textarea
+    const questionTextarea = document.getElementById('question');
+    questionTextarea.parentNode.insertBefore(questionsContainer, questionTextarea.nextSibling);
+}
+
+// Model loading functionality
+async function loadModels() {
+    const refreshBtn = document.getElementById('refresh-models-btn');
+    
+    if (refreshBtn) refreshBtn.disabled = true;
+    modelSelect.innerHTML = '<option value="">Loading models...</option>';
+
+    try {
+        const response = await fetch('/api/models');
+        const models = await response.json();
+
+        modelSelect.innerHTML = '<option value="">Select a model...</option>';
+        
+        models.forEach(model => {
+            const option = document.createElement('option');
+            option.value = model.id;
+            option.textContent = `${model.name} ${model.is_free ? '(Free)' : '(Paid)'}`;
+            modelSelect.appendChild(option); 
+        });
+
+        // Try to select a default model
+        const defaultModel = models.find(m => m.is_free) || models[0];
+        if (defaultModel) {
+            modelSelect.value = defaultModel.id;
+        }
+    } catch (error) {
+        modelSelect.innerHTML = '<option value="">Failed to load models</option>';
+        console.error('Failed to load models:', error);
+    } finally {
+        if (refreshBtn) refreshBtn.disabled = false;
+    }
+}
+
+// Test connection functionality
+async function testConnection() {
+    const dbUri = dbUriInput.value;
+    const resultDiv = document.getElementById('test-connection-result');
+    
+    if (!dbUri) {
+        resultDiv.innerHTML = '<span class="error">Please enter a database URI first!</span>';
+        return;
+    }
+
+    resultDiv.innerHTML = '<span class="loading">Testing connection...</span>';
+
+    try {
+        const response = await fetch('/api/test_connection', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ db_uri: dbUri })
+        });
+
+        const result = await response.json();
+        
+        if (result.connected) {
+            resultDiv.innerHTML = '<span class="success">✅ Connection successful!</span>';
+        } else {
+            resultDiv.innerHTML = `<span class="error">❌ Connection failed: ${result.message}</span>`;
+        }
+    } catch (error) {
+        resultDiv.innerHTML = `<span class="error">❌ Error: ${error.message}</span>`;
+    }
+}
+
+// Placeholder for executeQuery function (implement based on your existing logic)
+async function executeQuery(generateChart = false) {
+    // TODO: Implement query execution logic
+    console.log('Executing query...', generateChart);
+}
+
+// Database Management
+function saveBaseUri() {
+    const baseUri = baseDbUriInput.value.trim();
+    if (!baseUri) {
+        showError('Please enter a base database URL');
+        return;
+    }
+    
+    localStorage.setItem('baseDbUri', baseUri);
+    showMessage('Base database URL saved successfully', 'success');
+}
+
+async function switchActiveDatabase() {
+    const dbName = databaseSwitcher.value.trim();
+    if (!dbName) {
+        showError('Please enter a database name');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/worker/set_db', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ database: dbName })
+        });
+
+        const data = await response.json();
+        
+        if (response.ok) {
+            showMessage(`Database switched to: ${data.data.active_db}`, 'success');
+            checkWorkerStatus(); // Refresh status
+            
+            // Add to schema log
+            addSchemaLogEntry('info', `Database switched to: ${data.data.active_db}`);
+        } else {
+            showError(`Failed to switch database: ${data.message || 'Unknown error'}`);
+        }
+    } catch (error) {
+        showError(`Network error: ${error.message}`);
+    }
+}
+
+// Schema Log Management
+function addSchemaLogEntry(type, message, extraClass = '') {
+    const timestamp = new Date().toLocaleTimeString();
+    const logEntry = document.createElement('div');
+    logEntry.className = `log-entry ${type} ${extraClass}`;
+    
+    logEntry.innerHTML = `
+        <span class="timestamp">${timestamp}</span>
+        <span class="message">${message}</span>
+    `;
+    
+    schemaLogContainer.appendChild(logEntry);
+    
+    // Auto-scroll to bottom
+    schemaLogContainer.scrollTop = schemaLogContainer.scrollHeight;
+    
+    // Limit log entries to prevent memory issues
+    const entries = schemaLogContainer.querySelectorAll('.log-entry');
+    if (entries.length > 100) {
+        entries[0].remove();
+    }
+}
+
+function clearSchemaLog() {
+    schemaLogContainer.innerHTML = `
+        <div class="log-entry info">
+            <span class="timestamp">Cleared</span>
+            <span class="message">Schema log cleared</span>
+        </div>
+    `;
+}
+
+function toggleSchemaMonitoring() {
+    const isMonitoring = toggleSchemaMonitoringBtn.dataset.monitoring === 'true';
+    
+    if (isMonitoring) {
+        stopSchemaMonitoring();
+    } else {
+        startSchemaMonitoring();
+    }
+}
+
+function startSchemaMonitoring() {
+    // Note: This would typically connect to a Server-Sent Events endpoint
+    // For now, we'll simulate with periodic checks
+    toggleSchemaMonitoringBtn.textContent = 'Stop Monitoring';
+    toggleSchemaMonitoringBtn.dataset.monitoring = 'true';
+    toggleSchemaMonitoringBtn.className = 'btn btn-warning btn-sm';
+    
+    addSchemaLogEntry('info', 'Schema monitoring started');
+    
+    // Simulate periodic schema change detection
+    // In a real implementation, this would be SSE or WebSocket connection
+    schemaMonitoring = true;
+    simulateSchemaMonitoring();
+}
+
+function stopSchemaMonitoring() {
+    toggleSchemaMonitoringBtn.textContent = 'Start Monitoring';
+    toggleSchemaMonitoringBtn.dataset.monitoring = 'false';
+    toggleSchemaMonitoringBtn.className = 'btn btn-primary btn-sm';
+    
+    schemaMonitoring = false;
+    if (schemaEventSource) {
+        schemaEventSource.close();
+        schemaEventSource = null;
+    }
+    
+    addSchemaLogEntry('info', 'Schema monitoring stopped');
+}
+
+function simulateSchemaMonitoring() {
+    // This is a simulation - in real implementation, you'd connect to actual schema change events
+    // For demonstration purposes only
+    if (!schemaMonitoring) return;
+    
+    // Simulate random schema events for demo
+    setTimeout(() => {
+        if (schemaMonitoring && Math.random() > 0.7) {
+            const actions = [
+                { type: 'schema-change', message: '🔄 Table "users" created in schema "public"' },
+                { type: 'embedding-refresh', message: '✅ Embeddings refreshed for "public.users" (5 vectors)' },
+                { type: 'table-drop', message: '🗑️ Table "temp_data" dropped from schema "public"' }
+            ];
+            
+            const action = actions[Math.floor(Math.random() * actions.length)];
+            addSchemaLogEntry('info', action.message, action.type);
+        }
+        
+        simulateSchemaMonitoring();
+    }, 5000 + Math.random() * 10000); // Random interval between 5-15 seconds
+}
+
+// Helper function for showing messages
+function showMessage(message, type = 'info') {
+    // Reuse existing error display mechanism
+    const errorDiv = document.getElementById('error');
+    if (errorDiv) {
+        errorDiv.className = `error ${type}`;
+        errorDiv.textContent = message;
+        errorDiv.classList.remove('hidden');
+        
+        setTimeout(() => {
+            errorDiv.classList.add('hidden');
+        }, 3000);
     }
 }

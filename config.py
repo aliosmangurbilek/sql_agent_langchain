@@ -62,8 +62,14 @@ class AppConfig(BaseSettings):
     # Database
     # ---------------------------------------------------------- #
     DEFAULT_DB_URI: str = Field(
-        "sqlite:///langchain_agent.db",
+        "postgresql://postgres:2336@localhost:5432/happiness_index",
         env="DEFAULT_DB_URI"
+    )
+    
+    # Base database URL for multi-database schema worker
+    BASE_DATABASE_URL: str = Field(
+        "postgresql+asyncpg://postgres:2336@localhost:5432/",
+        env="BASE_DATABASE_URL"
     )
 
     # ---------------------------------------------------------- #

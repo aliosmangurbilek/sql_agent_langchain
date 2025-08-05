@@ -1,8 +1,18 @@
 """
 api.routes_query
-~~~~~~~~~~~~~~~~
-
-POST /api/query
+~~~~~~~~~~~~~~~@lru_cache(maxsize=16)  # aynı db_uri ve model için QueryEngine nesnesini sakla
+def _get_engine(db_uri: str, llm_model: str = "deepseek/deepseek-chat"):
+    # Her db_uri ve llm_model kombinasyonu için bir kere QueryEngine oluştur
+    # Bu sayede aynı veritabanı için birden fazla kez embedding yapmayız
+    
+    # Lazy import to avoid segfault on startup
+    try:
+        from core.db.query_engine import QueryEngine
+        logger.info(f"Using OpenRouter model: {llm_model}")
+        return QueryEngine(db_uri, llm_model=llm_model)
+    except Exception as e:
+        logger.error(f"Failed to create QueryEngine: {e}")
+        raisequery
 Body (JSON):
 {
   "db_uri": "postgresql://user:pw@localhost:5432/pagila",
@@ -25,8 +35,9 @@ import requests
 from flask import Blueprint, jsonify, request
 from werkzeug.exceptions import BadRequest
 
-from core.db.query_engine import QueryEngine
-from core.db.embedder import DBEmbedder
+# Don't import heavy ML libraries at startup
+# from core.db.query_engine import QueryEngine
+# from core.db.embedder import DBEmbedder
 import sqlalchemy as sa
 
 logger = logging.getLogger(__name__)
@@ -38,9 +49,14 @@ def _get_engine(db_uri: str, llm_model: str = "deepseek/deepseek-chat") -> Query
     # Her db_uri ve llm_model kombinasyonu için bir kere QueryEngine oluştur
     # Bu sayede aynı veritabanı için birden fazla kez embedding yapmayız
     
-    # Direkt olarak model ID'sini kullan
-    logger.info(f"Using OpenRouter model: {llm_model}")
-    return QueryEngine(db_uri, llm_model=llm_model)
+    # Lazy import to avoid segfault on startup
+    try:
+        from core.db.query_engine import QueryEngine
+        logger.info(f"Using OpenRouter model: {llm_model}")
+        return QueryEngine(db_uri, llm_model=llm_model)
+    except Exception as e:
+        logger.error(f"Failed to create QueryEngine: {e}")
+        raise
 
 
 @bp.post("/query")
@@ -67,6 +83,7 @@ def run_query():
 
     # Embedding ile en alakalı tablo/kolon önerilerini ekle
     try:
+        from core.db.embedder import DBEmbedder
         sa_engine = sa.create_engine(db_uri)
         embedder = DBEmbedder(sa_engine)
         suggestions = embedder.similarity_search(question, k=3)
