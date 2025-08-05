@@ -90,3 +90,4 @@ class AppConfig(BaseSettings):
 def get_config() -> AppConfig:
     """Get cached configuration instance"""
     return AppConfig()
+

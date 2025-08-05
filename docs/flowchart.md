@@ -26,3 +26,4 @@ sequenceDiagram
 
 The API also uses a `DBEmbedder` to suggest relevant tables
 based on the question. These suggestions are included in the `/api/query` response.
+

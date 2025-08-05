@@ -629,3 +629,4 @@ function setTheme(mode) {
         }
     }
 }
+

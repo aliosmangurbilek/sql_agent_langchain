@@ -85,3 +85,4 @@ def get_metadata(engine: sa.Engine, sample_rows: int = 0) -> List[Dict[str, Any]
                 meta.append(record)
 
     return meta
+

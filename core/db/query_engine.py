@@ -226,3 +226,4 @@ class QueryEngine:
             "data": rows,
             "rowcount": len(rows),
         }
+

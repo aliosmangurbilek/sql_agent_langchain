@@ -255,3 +255,4 @@ def chart_stream():
             "Access-Control-Allow-Origin": "*",
         }
     )
+

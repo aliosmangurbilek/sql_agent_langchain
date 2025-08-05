@@ -129,3 +129,4 @@ def test_connection():
     except Exception as exc:
         logger.error(f"Unexpected error during connection test: {exc}")
         return jsonify({'status': 'failure', 'error': str(exc)}), 500
+

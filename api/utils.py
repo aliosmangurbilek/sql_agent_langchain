@@ -10,3 +10,4 @@ class CustomJSONEncoder(json.JSONEncoder):
         if isinstance(obj, (date, datetime)):
             return obj.isoformat()
         return super().default(obj)
+

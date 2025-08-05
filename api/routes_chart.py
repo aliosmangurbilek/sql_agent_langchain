@@ -92,3 +92,4 @@ def run_chart():
     except Exception as exc:  # noqa: BLE001
         logger.exception("Chart generation failed")
         return jsonify({"error": str(exc)}), 500
+

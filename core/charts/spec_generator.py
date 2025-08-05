@@ -301,3 +301,4 @@ def _empty_spec(msg: str, title: str) -> Dict[str, Any]:
         "encoding": {"text": {"field": "Message", "type": "nominal"}},
         "title": title,
     }
+

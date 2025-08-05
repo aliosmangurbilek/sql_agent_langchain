@@ -157,3 +157,4 @@ def verify_sql(
         _check_cost(sql, engine, max_cost)
 
     return sql
+

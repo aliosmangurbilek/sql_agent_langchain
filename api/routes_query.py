@@ -178,3 +178,4 @@ def get_models():
     except Exception as exc:
         logger.error(f"Unexpected error fetching models: {exc}")
         return jsonify({"error": str(exc)}), 500
+
