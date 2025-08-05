@@ -8,11 +8,6 @@
     <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
     <script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
     <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
-    <!-- Application JavaScript modules -->
-    <script src="{{ url_for('static', filename='js/ui-utils.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/worker-manager.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/schema-logger.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </head>
 <body>
     <div class="container">
@@ -184,119 +179,12 @@
         </main>
     </div>
 
-    <script>
-        // Model loading functionality
-        async function loadModels() {
-            const modelSelect = document.getElementById('model-select');
-            const refreshBtn = document.getElementById('refresh-models-btn');
-            
-            // Disable during loading
-            modelSelect.disabled = true;
-            refreshBtn.disabled = true;
-            modelSelect.innerHTML = '<option value="">Loading models...</option>';
-            
-            try {
-                const response = await fetch('/api/models');
-                const result = await response.json();
-                
-                if (response.ok && result.status === 'success') {
-                    modelSelect.innerHTML = '';
-                    
-                    // Group models by type
-                    const freeModels = result.models.filter(m => m.is_free);
-                    const paidModels = result.models.filter(m => !m.is_free);
-                    
-                    // Add free models first
-                    if (freeModels.length > 0) {
-                        const freeGroup = document.createElement('optgroup');
-                        freeGroup.label = '🆓 Free Models';
-                        freeModels.forEach(model => {
-                            const option = document.createElement('option');
-                            option.value = model.id;
-                            option.textContent = `${model.name} (Free)`;
-                            if (model.description) {
-                                option.title = model.description;
-                            }
-                            freeGroup.appendChild(option);
-                        });
-                        modelSelect.appendChild(freeGroup);
-                    }
-                    
-                    // Add paid models
-                    if (paidModels.length > 0) {
-                        const paidGroup = document.createElement('optgroup');
-                        paidGroup.label = '💰 Paid Models';
-                        paidModels.forEach(model => {
-                            const option = document.createElement('option');
-                            option.value = model.id;
-                            option.textContent = `${model.name} ($${model.pricing.prompt}/1M tokens)`;
-                            if (model.description) {
-                                option.title = model.description;
-                            }
-                            paidGroup.appendChild(option);
-                        });
-                        modelSelect.appendChild(paidGroup);
-                    }
-                    
-                    // Select default model (first free model or deepseek/deepseek-chat)
-                    const defaultModel = freeModels.find(m => m.id.includes('deepseek')) || freeModels[0];
-                    if (defaultModel) {
-                        modelSelect.value = defaultModel.id;
-                    }
-                    
-                } else {
-                    modelSelect.innerHTML = '<option value="">Error loading models</option>';
-                    console.error('Failed to load models:', result.error);
-                }
-            } catch (error) {
-                modelSelect.innerHTML = '<option value="">Error loading models</option>';
-                console.error('Error loading models:', error);
-            } finally {
-                modelSelect.disabled = false;
-                refreshBtn.disabled = false;
-            }
-        }
-        
-        // Test Connection functionality
-        document.getElementById('test-connection-btn').addEventListener('click', async () => {
-            const dbUri = document.getElementById('db-uri').value;
-            const resultDiv = document.getElementById('test-connection-result');
-            
-            if (!dbUri) {
-                resultDiv.innerHTML = '<span class="error">Please enter a database URI first!</span>';
-                return;
-            }
-
-            resultDiv.innerHTML = '<span class="loading">Testing connection...</span>';
-
-            try {
-                const response = await fetch('/api/test_connection', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ db_uri: dbUri }),
-                });
-
-                const result = await response.json();
-                
-                if (response.ok) {
-                    resultDiv.innerHTML = `<span class="success">✅ Connection successful!</span>`;
-                } else {
-                    resultDiv.innerHTML = `<span class="error">❌ Connection failed: ${result.error}</span>`;
-                }
-            } catch (error) {
-                resultDiv.innerHTML = `<span class="error">❌ Error: ${error.message}</span>`;
-            }
-        });
-        
-        // Refresh models button
-        document.getElementById('refresh-models-btn').addEventListener('click', loadModels);
-        
-        // Load models when page loads
-        document.addEventListener('DOMContentLoaded', loadModels);
-    </script>
-
+    <!-- Application JavaScript modules -->
+    <script src="{{ url_for('static', filename='js/ui-utils.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/worker-manager.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/schema-logger.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/model-manager.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/config-manager.js') }}"></script>  
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

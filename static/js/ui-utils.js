@@ -81,6 +81,10 @@ class UIUtils {
         this.setTheme(isDark ? 'light' : 'dark');
     }
 
+    static getCurrentTheme() {
+        return document.body.classList.contains('dark-mode') ? 'dark' : 'light';
+    }
+
     static validateDatabaseUri(uri) {
         if (!uri) return false;
         

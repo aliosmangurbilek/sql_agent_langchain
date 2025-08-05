@@ -29,7 +29,7 @@ const tabBtns = document.querySelectorAll('.tab-btn');
 const tabPanes = document.querySelectorAll('.tab-pane');
 
 // Initialize the application
-document.addEventListener('DOMContentLoaded', async function() {
+document.addEventListener('DOMContentLoaded', function() {
     console.log('🚀 Initializing SQL Agent Application...');
     
     // Initialize modules
@@ -40,7 +40,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     
     // Load saved configuration and defaults
     configManager.loadSavedConfiguration();
-    await configManager.loadConfigDefaults();
+    configManager.loadConfigDefaults();
 
     // Apply saved theme
     const savedTheme = localStorage.getItem('theme') || 'light';
@@ -49,8 +49,8 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Setup core event listeners
     setupEventListeners();
 
-    // Load models and sample questions (async operations)
-    await modelManager.loadModels();
+    // Load models and sample questions
+    modelManager.loadModels();
     loadSampleQuestions();
 
     console.log('✅ Application initialized successfully');

@@ -86,8 +86,10 @@ class DBEmbedder:
 
         raw = db_name or (engine.url.database or "default")
         self.db_name = re.sub(r"[^0-9A-Za-z_.-]", "_", raw)
-
-        self.store_path = Path(store_dir) / f"{self.db_name}_{backend}"
+        
+        # Include embedding model in path to avoid dimension conflicts
+        model_suffix = re.sub(r"[^0-9A-Za-z_.-]", "_", embedding_model.split("/")[-1])
+        self.store_path = Path(store_dir) / f"{self.db_name}_{backend}_{model_suffix}"
         self._embeddings = HuggingFaceEmbeddings(model_name=embedding_model, encode_kwargs={"normalize_embeddings": True})
         self.engine = engine
 
@@ -142,7 +144,7 @@ class DBEmbedder:
         meta = get_metadata(self.engine)
         by_table: Dict[str, List[str]] = {}
         for row in meta:
-            by_table.setdefault(row["table"], []).append(f"{row['column']} ({row['type']})")
+            by_table.setdefault(row["table"], []).append(f"{row['column']} ({row['data_type']})")
 
         docs = [f"passage: Table {t}: {', '.join(cols)}" for t, cols in by_table.items()]
         metas = [{"table": t} for t in by_table]
@@ -163,10 +165,20 @@ class DBEmbedder:
     def similarity_search(self, query: str, k: int = 6) -> List[Dict[str, Any]]:
         store = self.ensure_store()
         query_text = f"query: {query}"
-        if hasattr(store, "similarity_search_with_score"):
-            hits = store.similarity_search_with_score(query_text, k=k)
-        else:
-            hits = [(doc, 0.0) for doc in store.similarity_search(query, k=k)]
+        
+        try:
+            if hasattr(store, "similarity_search_with_score"):
+                hits = store.similarity_search_with_score(query_text, k=k)
+            else:
+                hits = [(doc, 0.0) for doc in store.similarity_search(query, k=k)]
+        except Exception as exc:
+            logger.warning("Vector search failed (%s), rebuilding store", exc)
+            # Rebuild and try again
+            store = self.ensure_store(force=True)
+            if hasattr(store, "similarity_search_with_score"):
+                hits = store.similarity_search_with_score(query_text, k=k)
+            else:
+                hits = [(doc, 0.0) for doc in store.similarity_search(query, k=k)]
 
         return [
             {

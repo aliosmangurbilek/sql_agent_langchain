@@ -4,10 +4,32 @@ Database connection testing routes
 
 from flask import Blueprint, request, jsonify
 import logging
+from config import get_config
 
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('connection', __name__, url_prefix='/api')
+
+
+@bp.get('/config')
+def get_app_config():
+    """Get application configuration values for UI initialization"""
+    try:
+        config = get_config()
+        return jsonify({
+            "status": "success",
+            "config": {
+                "base_database_url": config.BASE_DATABASE_URL,
+                "default_db_uri": config.DEFAULT_DB_URI,
+                "openrouter_model": config.OPENROUTER_MODEL
+            }
+        }), 200
+    except Exception as e:
+        logger.error(f"Config retrieval error: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Failed to get config: {str(e)}"
+        }), 500
 
 
 @bp.post('/test_connection')

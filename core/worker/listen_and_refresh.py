@@ -28,6 +28,8 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from config import get_config
+
 from ..db.introspector import get_metadata
 
 # Configure logging
@@ -85,9 +87,10 @@ async def get_handles(db_name: str) -> Tuple[AsyncEngine, asyncpg.Connection]:
         return connection_cache[db_name]
     
     # Build database URL
-    base_url = os.environ.get("BASE_DATABASE_URL")
+    config = get_config()
+    base_url = config.BASE_DATABASE_URL
     if not base_url:
-        raise ValueError("BASE_DATABASE_URL environment variable not set")
+        raise ValueError("BASE_DATABASE_URL configuration not set")
     
     # Construct full database URL
     if base_url.endswith("/"):
@@ -183,9 +186,10 @@ async def schema_listener() -> None:
     """Main schema change listener loop."""
     try:
         # Use a dedicated connection for listening
-        base_url = os.environ.get("BASE_DATABASE_URL")
+        config = get_config()
+        base_url = config.BASE_DATABASE_URL
         if not base_url:
-            raise ValueError("BASE_DATABASE_URL environment variable not set")
+            raise ValueError("BASE_DATABASE_URL configuration not set")
         
         # Connect to the main database for listening
         listen_dsn = base_url.replace("+asyncpg", "")
