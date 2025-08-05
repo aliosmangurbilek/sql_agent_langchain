@@ -1,87 +1,119 @@
 from __future__ import annotations
+"""Introspector
 
-"""core.db.introspector
--------------------------------------------------
-Lightweight helper to extract **structural metadata** from any SQLAlchemy‑
-compatible database engine.  The resulting data structure is JSON‑serialisable
-and intended to feed both the embedding layer and human‑readable diagnostics.
+Tek bir sorgu ile PostgreSQL veritabanındaki *tüm* kullanici şemalarini gezerek
+tablo & sütun metadatasini döner.
 
-Usage
-~~~~~
->>> from sqlalchemy import create_engine
->>> from core.db.introspector import get_metadata
->>> engine = create_engine("postgresql://...")
->>> meta = get_metadata(engine)
+Her satırda aşağıdaki alanlar sağlanır::
+
+    {
+        "schema": "public",
+        "table": "customers",
+        "column": "customer_id",
+        "data_type": "integer",
+        "is_nullable": false,
+        "is_primary_key": true,
+        "fk_refs": ["public.orders.customer_id"],
+        "row_estimate": 599,
+        "table_size_mb": 1.34,
+        "table_comment": "Müşteri temel bilgileri",
+        "column_comment": "Birincil anahtar"
+    }
+
+Bu çıktı, DBEmbedder tarafında şema‑RAG için kullanılır.
 """
+from __future__ import annotations
 
-# Core imports
-from collections import defaultdict
-from typing import Any, Dict, List
-import warnings
-import sqlalchemy as sa
 from typing import List, Dict, Any
+from decimal import Decimal
 
-# Suppress SAWarning for unrecognized 'vector' column types
-try:
-    from sqlalchemy.exc import SAWarning
-    warnings.filterwarnings(
-        'ignore',
-        r"Did not recognize type 'vector' of column",
-        category=SAWarning
+from sqlalchemy import Engine, text
+
+# -----------------------------------------------------------------------------
+# Ana fonksiyon
+# -----------------------------------------------------------------------------
+
+def get_metadata(engine: Engine) -> List[Dict[str, Any]]:
+    """Veritabanı şema metadatasını geri döndür."""
+
+    sql = text(
+        """
+        WITH fk AS (
+            SELECT
+                con.conrelid                     AS relid,
+                unnest(con.conkey)               AS attnum,
+                string_agg(
+                    quote_ident(ns2.nspname) || '.' ||
+                    quote_ident(cl2.relname) || '.' ||
+                    quote_ident(att2.attname),
+                    ','
+                )                                AS fk_refs
+            FROM pg_constraint  con
+            JOIN pg_class       cl1   ON cl1.oid = con.conrelid
+            JOIN pg_namespace   ns1   ON ns1.oid = cl1.relnamespace
+            JOIN pg_class       cl2   ON cl2.oid = con.confrelid
+            JOIN pg_namespace   ns2   ON ns2.oid = cl2.relnamespace
+            JOIN unnest(con.conkey) WITH ORDINALITY AS ck(attnum, ord) ON TRUE
+            JOIN unnest(con.confkey) WITH ORDINALITY AS fk(attnum, ord)
+                                            USING(ord)
+            JOIN pg_attribute att2 ON att2.attrelid = con.confrelid
+                                   AND att2.attnum  = fk.attnum
+            WHERE con.contype = 'f'
+              AND ns1.nspname NOT IN ('pg_catalog','information_schema')
+            GROUP BY con.conrelid, ck.attnum
+        ),
+        pk AS (
+            SELECT
+                con.conrelid     AS relid,
+                unnest(con.conkey) AS attnum
+            FROM pg_constraint con
+            WHERE con.contype = 'p'
+        )
+        SELECT
+            ns.nspname                                    AS schema,
+            c.relname                                     AS table,
+            att.attname                                   AS column,
+            format_type(att.atttypid, att.atttypmod)      AS data_type,
+            NOT att.attnotnull                            AS is_nullable,
+            COALESCE(pk.attnum IS NOT NULL, FALSE)        AS is_primary_key,
+            COALESCE(fk.fk_refs, '')                      AS fk_refs,
+            c.reltuples::bigint                           AS row_estimate,
+            pg_total_relation_size(c.oid)::bigint/1048576 AS table_size_mb,
+            obj_description(c.oid)                        AS table_comment,
+            col_description(c.oid, att.attnum)            AS column_comment
+        FROM pg_class           c
+        JOIN pg_namespace       ns   ON ns.oid = c.relnamespace
+        JOIN pg_attribute       att  ON att.attrelid = c.oid
+        LEFT JOIN fk                  USING(relid, attnum)
+        LEFT JOIN pk                  USING(relid, attnum)
+        WHERE c.relkind IN ('r','p')
+          AND ns.nspname NOT IN ('pg_catalog','information_schema')
+          AND att.attisdropped = FALSE
+        ORDER BY ns.nspname, c.relname, att.attnum;
+        """
     )
-except ImportError:
-    pass
 
-__all__ = ["get_metadata"]
+    rows = engine.execute(sql).mappings().all()
 
+    def _to_float(val: Any) -> float:
+        if isinstance(val, Decimal):
+            return float(val)
+        return float(val) if val is not None else 0.0
 
-def _classify(coltype: sa.types.TypeEngine) -> str:
-    """Rough heuristic to bucket SQLAlchemy types into 'numeric', 'datetime',
-    'vector', or 'categorical'. Extend as needed."""
-    if isinstance(coltype, (sa.Integer, sa.Numeric, sa.Float, sa.DECIMAL)):
-        return "numeric"
-    if isinstance(coltype, (sa.Date, sa.DateTime, sa.TIMESTAMP)):
-        return "datetime"
-    # PostgreSQL vector tipi için string kontrolü
-    if 'vector' in str(coltype).lower():
-        return "vector"
-    return "categorical"
+    result: List[Dict[str, Any]] = []
+    for row in rows:
+        result.append({
+            "schema":          row["schema"],
+            "table":           row["table"],
+            "column":          row["column"],
+            "data_type":       row["data_type"],
+            "is_nullable":     bool(row["is_nullable"]),
+            "is_primary_key":  bool(row["is_primary_key"]),
+            "fk_refs":         row["fk_refs"].split(",") if row["fk_refs"] else [],
+            "row_estimate":    int(row["row_estimate"]),
+            "table_size_mb":   _to_float(row["table_size_mb"]),
+            "table_comment":   row["table_comment"],
+            "column_comment":  row["column_comment"],
+        })
 
-
-def get_metadata(engine: sa.Engine, sample_rows: int = 0) -> List[Dict[str, Any]]:
-    """Return a list of dicts describing every column in the database.
-
-    Parameters
-    ----------
-    engine        : SQLAlchemy Engine already connected.
-    sample_rows   : If >0, fetch up to *sample_rows* example values per column
-                    (expensive on large tables; disabled by default).
-    """
-    inspector = sa.inspect(engine)
-    meta: List[Dict[str, Any]] = []
-
-    for schema in inspector.get_schema_names():
-        for table_name in inspector.get_table_names(schema=schema):
-            for column in inspector.get_columns(table_name, schema=schema):
-                # Tam nitelikli tablo adını ekle (schema.table)
-                qualified_table_name = f"{schema}.{table_name}"
-                record: Dict[str, Any] = {
-                    "table": qualified_table_name,
-                    "column": column["name"],
-                    "type": str(column["type"]),
-                    "category": _classify(column["type"]),
-                }
-                if sample_rows > 0:
-                    try:
-                        sql = sa.text(
-                            f"SELECT {sa.sql.quote_identifier(column['name'])} FROM "
-                            f"{sa.sql.quote_identifier(table_name)} LIMIT :limit"
-                        )
-                        with engine.connect() as conn:
-                            rows = conn.execute(sql, {"limit": sample_rows}).scalars().all()
-                        record["sample"] = rows
-                    except Exception:  # noqa: BLE001
-                        record["sample"] = []  # ignore missing perms, etc.
-                meta.append(record)
-
-    return meta
+    return result

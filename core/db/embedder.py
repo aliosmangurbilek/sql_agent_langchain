@@ -74,7 +74,7 @@ class DBEmbedder:
         backend: BackendT = "faiss",
         db_name: str | None = None,
         store_dir: str | Path = "storage/vectors",
-        embedding_model: str = "sentence-transformers/all-mpnet-base-v2",
+        embedding_model: str = "intfloat/e5-large-v2",
         force_rebuild: bool = False,
     ) -> None:
         if backend == "scann" and ScaNN is None:
@@ -88,7 +88,7 @@ class DBEmbedder:
         self.db_name = re.sub(r"[^0-9A-Za-z_.-]", "_", raw)
 
         self.store_path = Path(store_dir) / f"{self.db_name}_{backend}"
-        self._embeddings = HuggingFaceEmbeddings(model_name=embedding_model)
+        self._embeddings = HuggingFaceEmbeddings(model_name=embedding_model, encode_kwargs={"normalize_embeddings": True})
         self.engine = engine
 
         if force_rebuild:
@@ -144,9 +144,8 @@ class DBEmbedder:
         for row in meta:
             by_table.setdefault(row["table"], []).append(f"{row['column']} ({row['type']})")
 
-        docs = [f"Table {t}: {', '.join(cols)}" for t, cols in by_table.items()]
+        docs = [f"passage: Table {t}: {', '.join(cols)}" for t, cols in by_table.items()]
         metas = [{"table": t} for t in by_table]
-
         Vector = self._vector_cls()
         store = Vector.from_texts(texts=docs, embedding=self._embeddings, metadatas=metas)
         store.save_local(str(path))
@@ -163,8 +162,9 @@ class DBEmbedder:
     # --------------------------------------------------------
     def similarity_search(self, query: str, k: int = 6) -> List[Dict[str, Any]]:
         store = self.ensure_store()
+        query_text = f"query: {query}"
         if hasattr(store, "similarity_search_with_score"):
-            hits = store.similarity_search_with_score(query, k=k)
+            hits = store.similarity_search_with_score(query_text, k=k)
         else:
             hits = [(doc, 0.0) for doc in store.similarity_search(query, k=k)]
 
