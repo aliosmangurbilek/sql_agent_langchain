@@ -51,12 +51,30 @@ def get_models():
             
             # Modelleri işle ve filtrele
             filtered_models = []
+            total_models = len(models_data.get("data", []))
+            logger.info(f"🔍 Processing {total_models} models from OpenRouter API")
+            
             for model in models_data.get("data", []):
-                # Moderated olmayan modelleri atla
-                if not model.get("top_provider", {}).get("is_moderated", True):
+                model_id = model.get("id", "")
+                top_provider = model.get("top_provider", {})
+                is_moderated = top_provider.get("is_moderated", None)  # None allows N/A values
+                
+                # Debug logging for common free model providers
+                if model_id.startswith(("deepseek", "meta-llama", "qwen", "microsoft", "google")):
+                    logger.debug(f"🔍 Model {model_id}: moderated={is_moderated}")
+                
+                # Only skip explicitly harmful models (we'll include None/False as safe)
+                # Skip if explicitly marked as unmoderated AND we have reason to exclude
+                # For now, we'll be more permissive and only exclude truly problematic models
+                skip_model = False
+                
+                # You could add specific model exclusion rules here if needed
+                # For example: if "nsfw" in model_id.lower() or "uncensored" in model_id.lower():
+                #     skip_model = True
+                
+                if skip_model:
                     continue
 
-                model_id = model.get("id", "")
                 name = model.get("name", model_id)
                 description = model.get("description", "")
                 pricing = model.get("pricing", {}) or {}
@@ -99,8 +117,19 @@ def get_models():
                     "total_price": total_price,
                 })
 
-            # Sıralama: Önce ücretsiz modeller, sonra fiyat, sonra isim
-            filtered_models.sort(key=lambda m: (not m["is_free"], m["total_price"], m["name"]))
+            # Sıralama: Önce ücretsiz modeller (alfabetik), sonra ücretli modeller (alfabetik)
+            filtered_models.sort(key=lambda m: (not m["is_free"], m["name"].lower()))
+            
+            # Debug logging
+            free_count = sum(1 for m in filtered_models if m["is_free"])
+            paid_count = len(filtered_models) - free_count
+            logger.info(f"✅ Filtered to {len(filtered_models)} models")
+            logger.info(f"📊 Found {free_count} free models, {paid_count} paid models")
+            
+            # Log some example free models for debugging
+            free_models = [m for m in filtered_models if m["is_free"]][:5]  # First 5 free models
+            for free_model in free_models:
+                logger.info(f"🆓 Free model: {free_model['id']} (${free_model['pricing']['total']})")
             
             return jsonify({
                 "status": "success",

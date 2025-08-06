@@ -7,6 +7,10 @@ let schemaLogger;
 let modelManager;
 let configManager;
 
+// Global state for caching query results (optimization)
+let lastQueryResult = null;
+let lastQueryQuestion = null;
+
 // Core DOM elements
 const questionInput = document.getElementById('question');
 const runQueryBtn = document.getElementById('run-query');
@@ -73,6 +77,16 @@ function setupEventListeners() {
     }
     if (runChartBtn) {
         runChartBtn.addEventListener('click', () => executeQuery(true));
+    }
+
+    // Clear cache when question changes
+    if (questionInput) {
+        questionInput.addEventListener('input', () => {
+            const currentQuestion = questionInput.value.trim();
+            if (lastQueryQuestion && lastQueryQuestion !== currentQuestion) {
+                clearCache();
+            }
+        });
     }
 
     // Sample questions
@@ -173,6 +187,19 @@ async function executeQuery(generateChart = false) {
         return;
     }
 
+    // Check if we can use cached data for chart generation
+    if (generateChart && lastQueryResult && lastQueryQuestion === question && lastQueryResult.data) {
+        console.log('🔄 Using cached data for chart generation');
+        showCacheNotification();
+        await handleChartFromCache();
+        return;
+    }
+
+    console.log(`🚀 ${generateChart ? 'Generating chart' : 'Executing query'}: "${question}"`);
+
+    // Set button loading state
+    setButtonLoadingState(generateChart, true);
+    
     showProgress(true);
     updateProgress(0, 'Initializing query execution...');
 
@@ -200,6 +227,10 @@ async function executeQuery(generateChart = false) {
         updateProgress(75, 'Rendering results...');
 
         if (response.ok) {
+            // Cache the results for potential chart generation
+            lastQueryResult = result;
+            lastQueryQuestion = question;
+            
             handleQuerySuccess(result, generateChart);
         } else {
             handleQueryError(result);
@@ -211,7 +242,142 @@ async function executeQuery(generateChart = false) {
         console.error('Query execution error:', error);
         UIUtils.showError(`Network error: ${error.message}`);
     } finally {
+        // Reset button state
+        setButtonLoadingState(generateChart, false);
         setTimeout(() => showProgress(false), 1000);
+    }
+}
+
+async function handleChartFromCache() {
+    try {
+        console.log('📊 Generating chart from cached data...');
+        
+        // Set button loading state for chart generation
+        setButtonLoadingState(true, true);
+        
+        showProgress(true);
+        updateProgress(30, 'Generating chart specification...', [
+            {name: 'Query Execution', completed: true},
+            {name: 'Chart Generation', completed: false},
+            {name: 'Rendering', completed: false}
+        ]);
+        
+        // Generate chart spec from cached data
+        const chartResponse = await fetch('/api/chart_spec', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                question: lastQueryQuestion,
+                data: lastQueryResult.data,
+                sql: lastQueryResult.sql
+            })
+        });
+        
+        if (chartResponse.ok) {
+            const chartResult = await chartResponse.json();
+            
+            updateProgress(70, 'Rendering chart...', [
+                {name: 'Query Execution', completed: true},
+                {name: 'Chart Generation', completed: true},
+                {name: 'Rendering', completed: false}
+            ]);
+            
+            // Combine cached data with new chart spec
+            const combinedResult = {
+                ...lastQueryResult,
+                vega_spec: chartResult.vega_spec
+            };
+            
+            handleQuerySuccess(combinedResult, true);
+            
+            updateProgress(100, 'Chart generated successfully!', [
+                {name: 'Query Execution', completed: true},
+                {name: 'Chart Generation', completed: true},
+                {name: 'Rendering', completed: true}
+            ]);
+        } else {
+            throw new Error(`Chart generation failed: ${chartResponse.status}`);
+        }
+        
+    } catch (error) {
+        console.error('Error generating chart from cache:', error);
+        UIUtils.showError(`Chart generation failed: ${error.message}`);
+        // Fallback to full query execution
+        console.log('🔄 Falling back to full query execution...');
+        clearCache();
+        executeQuery(true);
+    } finally {
+        setButtonLoadingState(true, false); // Reset chart button
+        setTimeout(() => showProgress(false), 1000);
+    }
+}
+
+function showCacheNotification() {
+    console.log('💡 Using cached query results for faster chart generation');
+    
+    // Show a small notification in the UI
+    const notification = document.createElement('div');
+    notification.className = 'cache-notification';
+    notification.innerHTML = '💡 Using cached data for faster chart generation';
+    notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: #4CAF50;
+        color: white;
+        padding: 10px 15px;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        z-index: 1000;
+        font-size: 14px;
+        animation: slideInRight 0.3s ease-out;
+    `;
+    
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.style.animation = 'slideOutRight 0.3s ease-in';
+        setTimeout(() => notification.remove(), 300);
+    }, 3000);
+}
+
+function clearCache() {
+    lastQueryResult = null;
+    lastQueryQuestion = null;
+    console.log('🗑️ Query cache cleared');
+}
+
+function setButtonLoadingState(isChart, loading) {
+    const targetBtn = isChart ? runChartBtn : runQueryBtn;
+    const otherBtn = isChart ? runQueryBtn : runChartBtn;
+    
+    if (!targetBtn) return;
+    
+    if (loading) {
+        // Set loading state for active button
+        targetBtn.disabled = true;
+        targetBtn.dataset.originalText = targetBtn.textContent;
+        targetBtn.innerHTML = isChart ? 
+            '<span class="btn-spinner">⏳</span> Generating Chart...' : 
+            '<span class="btn-spinner">⏳</span> Fetching Data...';
+        
+        // Disable other button too
+        if (otherBtn) {
+            otherBtn.disabled = true;
+        }
+    } else {
+        // Reset both buttons
+        if (targetBtn.dataset.originalText) {
+            targetBtn.textContent = targetBtn.dataset.originalText;
+            delete targetBtn.dataset.originalText;
+        }
+        targetBtn.disabled = false;
+        
+        if (otherBtn) {
+            otherBtn.disabled = false;
+        }
     }
 }
 

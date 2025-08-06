@@ -30,7 +30,6 @@ safe_sql = verify_sql(sql, engine=engine)  # may raise SQLValidationError
 
 from typing import Optional
 import re
-import sqlglot                   # type: ignore
 import sqlalchemy as sa
 
 __all__ = [

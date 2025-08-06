@@ -214,21 +214,3 @@ class DBEmbedder:
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<DBEmbedder {self.db_name} ({self.backend})>"
-
-
-def upsert_rows(rows: list[dict]) -> None:
-    """
-    Helper function to upsert schema rows into embeddings table.
-    Used by the background worker for live schema updates.
-    
-    Args:
-        rows: List of dicts with 'schema', 'table', 'embedding' keys
-    """
-    # This is a placeholder implementation - the actual upsert logic
-    # is handled by the background worker using direct SQL operations
-    # for better performance with async connections
-    pass
-
-
-if __name__ == "__main__":  # pragma: no cover
-    DBEmbedder._cli()
