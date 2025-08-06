@@ -14,6 +14,7 @@ import time
 import threading
 from typing import Any, Dict, Generator
 from queue import Queue
+import queue
 
 from flask import Blueprint, request, Response
 from werkzeug.exceptions import BadRequest
@@ -54,20 +55,21 @@ class ProgressTracker:
             
     def get_updates(self) -> Generator[Dict, None, None]:
         """Generator that yields progress updates."""
+        last_ping = time.time()
         while not self.is_complete:
             try:
-                # Wait for up to 1 second for a new update
-                update = self.progress_queue.get(timeout=1.0)
+                update = self.progress_queue.get(timeout=5)
                 yield update
                 self.progress_queue.task_done()
-            except:
-                # Timeout - yield a heartbeat to keep connection alive
-                yield {
-                    "step": "heartbeat",
-                    "message": "Processing...",
-                    "progress": -1,
-                    "timestamp": time.time()
-                }
+            except queue.Empty:
+                if time.time() - last_ping > 30:
+                    yield {
+                        "step": "heartbeat",
+                        "message": "Processing...",
+                        "progress": -1,
+                        "timestamp": time.time(),
+                    }
+                    last_ping = time.time()
                 
         # Yield any remaining updates
         while not self.progress_queue.empty():
@@ -118,11 +120,13 @@ def execute_query_in_background(db_uri: str, question: str, model: str, tracker:
         tracker.update("error", f"Error: {str(e)}", -1)
 
 
-def execute_chart_in_background(db_uri: str, question: str, model: str, tracker: ProgressTracker):
+def execute_chart_in_background(
+    db_uri: str, question: str, model: str, use_llm: bool, tracker: ProgressTracker
+):
     """Execute chart generation in a background thread with progress tracking."""
     try:
         tracker.update("start", "Starting chart generation...", 0)
-        
+
         # Step 1: Initialize query engine
         tracker.update("init", "Initializing query engine...", 10)
         qe = QueryEngine(db_uri, llm_model=model)
@@ -143,7 +147,7 @@ def execute_chart_in_background(db_uri: str, question: str, model: str, tracker:
             question=question,
             sql=result["sql"],
             data=result["data"],
-            use_llm=True,
+            use_llm=use_llm,
         )
         
         # Step 5: Complete
@@ -178,18 +182,18 @@ def process_query_with_progress(db_uri: str, question: str, model: str) -> Gener
             )
 
 
-def process_chart_with_progress(db_uri: str, question: str, model: str) -> Generator[str, None, None]:
+def process_chart_with_progress(db_uri: str, question: str, model: str, use_llm: bool) -> Generator[str, None, None]:
     """Process a chart generation with progress updates using background thread."""
     tracker = ProgressTracker()
-    
+
     # Start background thread
     thread = threading.Thread(
         target=execute_chart_in_background,
-        args=(db_uri, question, model, tracker)
+        args=(db_uri, question, model, use_llm, tracker)
     )
     thread.daemon = True
     thread.start()
-    
+
     # Stream progress updates
     for update in tracker.get_updates():
         if update["step"] != "heartbeat":  # Don't emit heartbeat messages
@@ -239,12 +243,13 @@ def chart_stream():
     db_uri = body.get("db_uri")
     question = body.get("question")
     model = body.get("model", "deepseek/deepseek-chat")
+    use_llm = bool(body.get("use_llm", False))
 
     if not db_uri or not question:
         raise BadRequest("Both 'db_uri' and 'question' fields are required")
 
     def generate():
-        yield from process_chart_with_progress(db_uri, question, model)
+        yield from process_chart_with_progress(db_uri, question, model, use_llm)
 
     return Response(
         generate(),

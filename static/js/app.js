@@ -19,6 +19,7 @@ const sqlOutput = document.getElementById('sql-output');
 const dataOutput = document.getElementById('data-output');
 const chartOutput = document.getElementById('chart-output');
 const themeToggle = document.getElementById('theme-toggle');
+const useLlmToggle = document.getElementById('use-llm');
 
 // Progress elements
 const progressContainer = document.getElementById('progress-container');
@@ -176,6 +177,7 @@ async function executeQuery(generateChart = false) {
     const question = questionInput.value.trim();
     const dbUri = configManager.getCurrentDbUri();
     const selectedModel = modelManager.getSelectedModel();
+    const useLlm = useLlmToggle ? useLlmToggle.checked : false;
 
     if (!dbUri) {
         UIUtils.showError('Please configure a database URI first');
@@ -216,7 +218,8 @@ async function executeQuery(generateChart = false) {
             body: JSON.stringify({
                 question: question,
                 db_uri: dbUri,
-                model: selectedModel
+                model: selectedModel,
+                use_llm: useLlm
             }),
         });
 
@@ -263,6 +266,7 @@ async function handleChartFromCache() {
         ]);
         
         // Generate chart spec from cached data
+        const useLlm = useLlmToggle ? useLlmToggle.checked : false;
         const chartResponse = await fetch('/api/chart_spec', {
             method: 'POST',
             headers: {
@@ -271,7 +275,8 @@ async function handleChartFromCache() {
             body: JSON.stringify({
                 question: lastQueryQuestion,
                 data: lastQueryResult.data,
-                sql: lastQueryResult.sql
+                sql: lastQueryResult.sql,
+                use_llm: useLlm
             })
         });
         

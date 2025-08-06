@@ -25,6 +25,7 @@ from langchain.schema import LLMResult
 from langchain.schema.agent import AgentAction, AgentFinish
 
 from core.db.embedder import DBEmbedder
+from core.db.verify_sql import verify_sql
 
 logger = logging.getLogger(__name__)
 
@@ -88,9 +89,11 @@ class LoggingSQLDatabase(SQLDatabase):
         parameters: Dict[str, Any] | None = None,
         execution_options: Dict[str, Any] | None = None,
     ) -> sa.engine.Result | str | list[Dict[str, Any]]:
-        self.last_query = str(command)
+        raw_sql = str(command)
+        safe_sql = verify_sql(raw_sql, engine=self._engine, auto_limit=True)
+        self.last_query = safe_sql
         result = self._execute(
-            command,
+            sa.text(safe_sql),
             fetch,
             parameters=parameters,
             execution_options=execution_options,
@@ -160,15 +163,6 @@ class QueryEngine:
                 "X-Title": "LangChain SQL Agent"
             }
         )
-
-        # Test LLM connection
-        try:
-            test_response = self.llm.invoke("Hello")
-            logger.info(f"✅ LLM connection successful with model: {llm_model}")
-        except Exception as e:
-            logger.error(f"❌ LLM connection failed: {e}")
-            logger.error(f"Model: {llm_model}")
-            raise ValueError(f"Failed to connect to OpenRouter with model {llm_model}: {e}")
 
         # Her veritabanı için izole bir DBEmbedder oluştur
         # URI'den veritabanı adını çıkararak doğru vektör deposunu hedeflemesini sağla
@@ -273,11 +267,14 @@ class QueryEngine:
         result = agent.invoke({"input": nl_query}, config={"callbacks": callbacks})
         answer = result.get("output", "") if isinstance(result, dict) else str(result)
 
+        generated_sql = getattr(db, "last_query", "")
+        safe_sql = verify_sql(generated_sql, engine=self.engine)
+
         rows = getattr(db, "last_result", [])
 
         return {
             "answer": answer,
-            "sql": getattr(db, "last_query", ""),
+            "sql": safe_sql,
             "data": rows,
             "rowcount": len(rows),
         }
