@@ -63,6 +63,7 @@ def run_chart():
     db_uri = body.get("db_uri")
     question = body.get("question")
     model = body.get("model", "gpt-4o-mini")  # Default to gpt-4o-mini if not specified
+    use_llm = bool(body.get("use_llm", False))
 
     if not db_uri or not question:
         raise BadRequest("Both 'db_uri' and 'question' fields are required")
@@ -76,7 +77,7 @@ def run_chart():
             question=question,
             sql=result["sql"],
             data=result["data"],
-            use_llm=True,  # OpenAI API key varsa LLM ile üret
+            use_llm=use_llm,
         )
 
         return (
@@ -118,6 +119,7 @@ def generate_chart_spec_only():
     question = body.get("question", "")
     data = body.get("data", [])
     sql = body.get("sql", "")
+    use_llm = bool(body.get("use_llm", False))
 
     if not data:
         raise BadRequest("'data' field is required and cannot be empty")
@@ -133,7 +135,7 @@ def generate_chart_spec_only():
             question=question,
             sql=sql,
             data=data,
-            use_llm=True,  # OpenAI API key varsa LLM ile üret
+            use_llm=use_llm,
         )
 
         logger.info(f"✅ Chart spec generated successfully ({len(data)} data points)")

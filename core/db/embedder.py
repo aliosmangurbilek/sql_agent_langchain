@@ -153,15 +153,17 @@ class DBEmbedder:
             
             # Generate embedding
             embedding = self._embeddings.embed_query(text)
-            
-            # Convert embedding list to pgvector format string
-            embedding_str = str(embedding)
-            
-            # Store in pgvector
-            await conn.execute("""
+
+            # Store in pgvector using binary format
+            await conn.execute(
+                """
                 INSERT INTO schema_embeddings (schema, "table", embedding)
                 VALUES ($1, $2, $3::vector)
-            """, schema_name, table_name, embedding_str)
+                """,
+                schema_name,
+                table_name,
+                asyncpg.Vector(embedding),
+            )
         
         logger.info(f"✅ Stored {len(by_table)} table embeddings for database: {self.db_name}")
 
@@ -175,15 +177,15 @@ class DBEmbedder:
         
         # Generate query embedding
         query_embedding = self._embeddings.embed_query(query_text)
-        query_embedding_str = str(query_embedding)
         
         db_url = self._get_db_url_for_asyncpg()
         conn = await asyncpg.connect(db_url)
         
         try:
             # Search using cosine similarity (1 - cosine_distance)
-            results = await conn.fetch("""
-                SELECT 
+            results = await conn.fetch(
+                """
+                SELECT
                     schema,
                     "table",
                     (1 - (embedding <=> $1::vector)) AS similarity_score
@@ -191,7 +193,11 @@ class DBEmbedder:
                 WHERE schema = $2
                 ORDER BY embedding <=> $1::vector
                 LIMIT $3
-            """, query_embedding_str, self.db_name, k)
+                """,
+                asyncpg.Vector(query_embedding),
+                self.db_name,
+                k,
+            )
             
             return [
                 {
