@@ -9,6 +9,7 @@ import asyncio
 
 import sqlalchemy as sa
 import asyncpg
+from pgvector.asyncpg import Vector, register_vector
 from langchain_huggingface import HuggingFaceEmbeddings
 
 from .introspector import get_metadata
@@ -107,21 +108,22 @@ class DBEmbedder:
         
         db_url = self._get_db_url_for_asyncpg()
         conn = await asyncpg.connect(db_url)
-        
+        await register_vector(conn)
+
         try:
             # Check if we already have embeddings for this database
             count = await conn.fetchval(
                 "SELECT COUNT(*) FROM schema_embeddings WHERE schema = $1",
                 self.db_name
             )
-            
+
             if count > 0 and not force:
                 logger.info(f"✅ Found {count} existing embeddings for database: {self.db_name}")
                 return
-                
+
             # Rebuild embeddings
             await self._build_embeddings(conn, force=force)
-            
+
         finally:
             await conn.close()
 
@@ -162,7 +164,7 @@ class DBEmbedder:
                 """,
                 schema_name,
                 table_name,
-                asyncpg.Vector(embedding),
+                Vector(embedding),
             )
         
         logger.info(f"✅ Stored {len(by_table)} table embeddings for database: {self.db_name}")
@@ -180,7 +182,8 @@ class DBEmbedder:
         
         db_url = self._get_db_url_for_asyncpg()
         conn = await asyncpg.connect(db_url)
-        
+        await register_vector(conn)
+
         try:
             # Search using cosine similarity (1 - cosine_distance)
             results = await conn.fetch(
@@ -194,11 +197,11 @@ class DBEmbedder:
                 ORDER BY embedding <=> $1::vector
                 LIMIT $3
                 """,
-                asyncpg.Vector(query_embedding),
+                Vector(query_embedding),
                 self.db_name,
                 k,
             )
-            
+
             return [
                 {
                     "table": f"{row['schema']}.{row['table']}",
@@ -207,7 +210,7 @@ class DBEmbedder:
                 }
                 for row in results
             ]
-            
+
         finally:
             await conn.close()
 
