@@ -30,7 +30,6 @@ safe_sql = verify_sql(sql, engine=engine)  # may raise SQLValidationError
 
 from typing import Optional
 import re
-import sqlglot                   # type: ignore
 import sqlalchemy as sa
 
 __all__ = [
@@ -62,7 +61,7 @@ class HighCostSQLError(SQLValidationError):
 # ---------------------------------------------------------------------------
 
 _MUTATION_REGEX = re.compile(r"\b(INSERT|UPDATE|DELETE|MERGE|DROP|ALTER|TRUNCATE|CREATE)\b", re.I)
-_SELECT_REGEX   = re.compile(r"\bSELECT\b", re.I)
+_SELECT_REGEX   = re.compile(r"\b(SELECT|WITH|EXPLAIN)\b", re.I)  # Allow WITH and EXPLAIN statements
 _LIMIT_REGEX    = re.compile(r"\bLIMIT\b", re.I)
 
 _DEFAULT_LIMIT  = 1000
@@ -76,15 +75,25 @@ def _check_single_statement(raw_sql: str) -> None:
 
 
 def _check_read_only(raw_sql: str) -> None:
+    # Check for dangerous mutations
     if _MUTATION_REGEX.search(raw_sql):
         raise UnsafeSQLError("Only read‑only (SELECT) queries are permitted.")
-    if not _SELECT_REGEX.search(raw_sql):
-        raise UnsafeSQLError("Query does not appear to be a SELECT statement.")
+    
+    # Allow SELECT, WITH (CTE), and EXPLAIN statements
+    sql_upper = raw_sql.upper().strip()
+    
+    # Check if it's a read-only statement
+    if not (_SELECT_REGEX.search(raw_sql) or 
+            sql_upper.startswith("WITH ") or 
+            sql_upper.startswith("EXPLAIN")):
+        raise UnsafeSQLError("Query does not appear to be a read-only statement.")
 
 
 def _maybe_append_limit(raw_sql: str, limit: int) -> str:
     # Add a LIMIT if none exists (simple regex, not full parser for perf).
-    if _LIMIT_REGEX.search(raw_sql):
+    # Skip LIMIT addition for EXPLAIN queries
+    sql_upper = raw_sql.upper().strip()
+    if _LIMIT_REGEX.search(raw_sql) or sql_upper.startswith("EXPLAIN"):
         return raw_sql
     return f"{raw_sql.rstrip().rstrip(';')} LIMIT {limit}"
 

@@ -22,7 +22,6 @@ Her satırda aşağıdaki alanlar sağlanır::
 
 Bu çıktı, DBEmbedder tarafında şema‑RAG için kullanılır.
 """
-from __future__ import annotations
 
 from typing import List, Dict, Any
 from decimal import Decimal
@@ -41,7 +40,7 @@ def get_metadata(engine: Engine) -> List[Dict[str, Any]]:
         WITH fk AS (
             SELECT
                 con.conrelid                     AS relid,
-                unnest(con.conkey)               AS attnum,
+                ck.attnum                        AS attnum,
                 string_agg(
                     quote_ident(ns2.nspname) || '.' ||
                     quote_ident(cl2.relname) || '.' ||
@@ -64,8 +63,8 @@ def get_metadata(engine: Engine) -> List[Dict[str, Any]]:
         ),
         pk AS (
             SELECT
-                con.conrelid     AS relid,
-                unnest(con.conkey) AS attnum
+                con.conrelid                     AS relid,
+                unnest(con.conkey)               AS attnum
             FROM pg_constraint con
             WHERE con.contype = 'p'
         )
@@ -84,8 +83,8 @@ def get_metadata(engine: Engine) -> List[Dict[str, Any]]:
         FROM pg_class           c
         JOIN pg_namespace       ns   ON ns.oid = c.relnamespace
         JOIN pg_attribute       att  ON att.attrelid = c.oid
-        LEFT JOIN fk                  USING(relid, attnum)
-        LEFT JOIN pk                  USING(relid, attnum)
+        LEFT JOIN fk ON fk.relid = c.oid AND fk.attnum = att.attnum
+        LEFT JOIN pk ON pk.relid = c.oid AND pk.attnum = att.attnum
         WHERE c.relkind IN ('r','p')
           AND ns.nspname NOT IN ('pg_catalog','information_schema')
           AND att.attisdropped = FALSE
@@ -93,7 +92,9 @@ def get_metadata(engine: Engine) -> List[Dict[str, Any]]:
         """
     )
 
-    rows = engine.execute(sql).mappings().all()
+    # Use modern SQLAlchemy 2.0+ syntax
+    with engine.connect() as conn:
+        rows = conn.execute(sql).mappings().all()
 
     def _to_float(val: Any) -> float:
         if isinstance(val, Decimal):

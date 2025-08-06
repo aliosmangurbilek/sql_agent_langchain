@@ -2,6 +2,7 @@
 flask
 gunicorn
 gevent
+fastapi
 
 # LangChain and AI dependencies
 langchain
@@ -14,13 +15,13 @@ sqlalchemy
 sqlglot
 psycopg2-binary
 pgvector
+asyncpg
 scann
 sentence-transformers
 # Configuration and utilities
 pydantic
 pydantic-settings
 python-dotenv
-requests
 requests
 
 # Chart and data visualization dependencies

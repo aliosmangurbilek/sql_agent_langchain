@@ -1,14 +1,25 @@
-const dbUriInput = document.getElementById('db-uri');
-const modelSelect = document.getElementById('model-select');
+// Main Application JavaScript - Refactored and Modularized
+// Core functionality and module coordination
+
+// Global module instances
+let workerManager;
+let schemaLogger;
+let modelManager;
+let configManager;
+
+// Global state for caching query results (optimization)
+let lastQueryResult = null;
+let lastQueryQuestion = null;
+
+// Core DOM elements
 const questionInput = document.getElementById('question');
 const runQueryBtn = document.getElementById('run-query');
 const runChartBtn = document.getElementById('run-chart');
 const sqlOutput = document.getElementById('sql-output');
 const dataOutput = document.getElementById('data-output');
 const chartOutput = document.getElementById('chart-output');
-const loadingDiv = document.getElementById('loading');
-const errorDiv = document.getElementById('error');
 const themeToggle = document.getElementById('theme-toggle');
+const useLlmToggle = document.getElementById('use-llm');
 
 // Progress elements
 const progressContainer = document.getElementById('progress-container');
@@ -23,609 +34,489 @@ const tabBtns = document.querySelectorAll('.tab-btn');
 const tabPanes = document.querySelectorAll('.tab-pane');
 
 // Initialize the application
-document.addEventListener('DOMContentLoaded', function() {
-    // Load saved DB URI from localStorage
-    const savedDbUri = localStorage.getItem('dbUri');
-    if (savedDbUri) {
-        dbUriInput.value = savedDbUri;
-    }
+document.addEventListener('DOMContentLoaded', async function() {
+    console.log('🚀 Initializing SQL Agent Application...');
+    
+    // Initialize modules
+    workerManager = new WorkerManager();
+    schemaLogger = new SchemaLogger();
+    modelManager = new ModelManager();
+    configManager = new ConfigManager();
+    
+    // Load saved configuration and defaults
+    configManager.loadSavedConfiguration();
+    await configManager.loadConfigDefaults();
 
     // Apply saved theme
     const savedTheme = localStorage.getItem('theme') || 'light';
-    setTheme(savedTheme);
+    UIUtils.setTheme(savedTheme);
     
-    // Setup event listeners
+    // Setup core event listeners
     setupEventListeners();
 
-    // Load models from OpenRouter
-    loadModels();
-
-    // Load sample questions
+    // Load models and sample questions (async operations)
+    await modelManager.loadModels();
     loadSampleQuestions();
+
+    console.log('✅ Application initialized successfully');
 });
 
 function setupEventListeners() {
     // Tab switching
     tabBtns.forEach(btn => {
-        btn.addEventListener('click', () => switchTab(btn.dataset.tab));
-    });
-
-    // Save DB URI to localStorage
-    dbUriInput.addEventListener('change', () => {
-        localStorage.setItem('dbUri', dbUriInput.value);
-    });
-    // Save selected model to localStorage
-    modelSelect.addEventListener('change', () => {
-        localStorage.setItem('selectedModel', modelSelect.value);
-    });
-
-    // Refresh models button
-    const refreshModelsBtn = document.getElementById('refresh-models-btn');
-    if (refreshModelsBtn) {
-        refreshModelsBtn.addEventListener('click', () => {
-            refreshModelsBtn.disabled = true;
-            refreshModelsBtn.textContent = '⏳';
-            loadModels().finally(() => {
-                refreshModelsBtn.disabled = false;
-                refreshModelsBtn.textContent = '🔄';
-            });
-        });
-    }
-
-    // Query execution
-    runQueryBtn.addEventListener('click', executeQuery);
-    runChartBtn.addEventListener('click', generateChart);
-
-    // Enter key handling
-    questionInput.addEventListener('keydown', (e) => {
-        if (e.ctrlKey && e.key === 'Enter') {
-            executeQuery();
-        }
+        btn.addEventListener('click', () => UIUtils.switchTab(btn.dataset.tab));
     });
 
     // Theme toggle
     if (themeToggle) {
-        themeToggle.addEventListener('click', () => {
-            const newTheme = document.body.classList.contains('dark-mode') ? 'light' : 'dark';
-            setTheme(newTheme);
-            localStorage.setItem('theme', newTheme);
-        });
-    }
-}
-
-function switchTab(tabName) {
-    // Update tab buttons
-    tabBtns.forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.tab === tabName);
-    });
-
-    // Update tab panes
-    tabPanes.forEach(pane => {
-        pane.classList.toggle('active', pane.id === `${tabName}-tab`);
-    });
-}
-
-function showLoading(show = true, message = "Processing...") {
-    const loadingSpan = loadingDiv.querySelector('span');
-    if (loadingSpan) {
-        loadingSpan.textContent = message;
-    }
-    loadingDiv.classList.toggle('hidden', !show);
-    runQueryBtn.disabled = show;
-    runChartBtn.disabled = show;
-}
-
-function hideLoading() {
-    showLoading(false);
-}
-
-function showProgress(show = true) {
-    progressContainer.classList.toggle('hidden', !show);
-    if (!show) {
-        resetProgress();
-    }
-}
-
-function updateProgress(step, message, progress, isError = false) {
-    if (isError) {
-        progressTitle.textContent = "Error occurred";
-        progressMessage.textContent = message;
-        progressFill.style.width = "100%";
-        progressFill.style.background = "#dc3545";
-        progressPercentage.textContent = "Error";
-        return;
+        themeToggle.addEventListener('click', UIUtils.toggleTheme);
     }
 
-    progressTitle.textContent = getStepTitle(step);
-    progressMessage.textContent = message;
-    progressFill.style.width = progress + "%";
-    progressPercentage.textContent = progress + "%";
-    
-    addProgressStep(step, message, progress);
-}
-
-function resetProgress() {
-    progressFill.style.width = "0%";
-    progressFill.style.background = "linear-gradient(90deg, #667eea 0%, #764ba2 100%)";
-    progressPercentage.textContent = "0%";
-    progressSteps.innerHTML = "";
-}
-
-function getStepTitle(step) {
-    const titles = {
-        'start': 'Starting Process...',
-        'init': 'Initializing...',
-        'llm_start': 'AI Processing...',
-        'embedding': 'Database Analysis...',
-        'query_gen': 'Creating SQL...',
-        'query_exec': 'Running Query...',
-        'chart_gen': 'Creating Visualization...',
-        'complete': 'Complete!',
-        'error': 'Error'
-    };
-    return titles[step] || 'Processing...';
-}
-
-function addProgressStep(step, message, progress) {
-    const stepElement = document.createElement('div');
-    stepElement.className = 'progress-step';
-    
-    let icon = '';
-    let className = 'pending';
-    
-    if (progress === 100) {
-        className = 'completed';
-        icon = '✓';
-    } else if (progress > 0) {
-        className = 'current';
-        icon = '⏳';
-    } else {
-        icon = '⏸';
+    // Query execution
+    if (runQueryBtn) {
+        runQueryBtn.addEventListener('click', () => executeQuery(false));
     }
-    
-    stepElement.className += ' ' + className;
-    stepElement.innerHTML = `
-        <span class="progress-step-icon">${icon}</span>
-        <span>${message}</span>
-    `;
-    
-    // Remove any existing step with the same step name
-    const existingSteps = progressSteps.querySelectorAll(`[data-step="${step}"]`);
-    existingSteps.forEach(el => el.remove());
-    
-    stepElement.setAttribute('data-step', step);
-    progressSteps.appendChild(stepElement);
-}
-
-function showError(message) {
-    errorDiv.textContent = message;
-    errorDiv.classList.remove('hidden');
-}
-
-function hideError() {
-    errorDiv.classList.add('hidden');
-}
-
-function handleError(error) {
-    console.error('Request failed:', error);
-    const msg = error && error.message ? error.message : 'An unexpected error occurred';
-    showError(msg);
-}
-
-// Helper to fetch JSON with graceful error handling
-async function fetchJson(url, options) {
-    const response = await fetch(url, options);
-    const text = await response.text();
-    if (!response.ok) {
-        try {
-            const data = JSON.parse(text);
-            throw new Error(data.error || response.statusText);
-        } catch (_) {
-            throw new Error(text || response.statusText);
-        }
-    }
-    try {
-        return JSON.parse(text);
-    } catch (_) {
-        throw new Error('Invalid JSON response');
+    if (runChartBtn) {
+        runChartBtn.addEventListener('click', () => executeQuery(true));
     }
 
-}
-
-function executeQuery() {
-    const dbUri = dbUriInput.value.trim();
-    const question = questionInput.value.trim();
-    const model = modelSelect.value;
-
-    if (!dbUri || !question) {
-        showError('Please provide both a database URI and a question.');
-        return;
-    }
-
-    hideError();
-    showProgress(true);
-    runQueryBtn.disabled = true;
-    runChartBtn.disabled = true;
-
-    const eventSource = new EventSource('/api/query-stream', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ db_uri: dbUri, question: question, model: model })
-    });
-
-    // For EventSource, we need to use fetch for POST data and then connect to SSE
-    fetch('/api/query-stream', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ db_uri: dbUri, question: question, model: model })
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-
-        function readStream() {
-            return reader.read().then(({ done, value }) => {
-                if (done) {
-                    showProgress(false);
-                    runQueryBtn.disabled = false;
-                    runChartBtn.disabled = false;
-                    return;
-                }
-
-                const chunk = decoder.decode(value);
-                const lines = chunk.split('\n');
-                
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        try {
-                            const data = JSON.parse(line.slice(6));
-                            handleProgressUpdate(data, 'query');
-                        } catch (e) {
-                            console.error('Failed to parse SSE data:', e);
-                        }
-                    }
-                }
-
-                return readStream();
-            });
-        }
-
-        return readStream();
-    })
-    .catch(error => {
-        console.error('Stream error:', error);
-        showError(error.message);
-        showProgress(false);
-        runQueryBtn.disabled = false;
-        runChartBtn.disabled = false;
-    });
-}
-
-function generateChart() {
-    const dbUri = dbUriInput.value.trim();
-    const question = questionInput.value.trim();
-    const model = modelSelect.value;
-
-    if (!dbUri || !question) {
-        showError('Please provide both a database URI and a question.');
-        return;
-    }
-
-    hideError();
-    showProgress(true);
-    runQueryBtn.disabled = true;
-    runChartBtn.disabled = true;
-
-    fetch('/api/chart-stream', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ db_uri: dbUri, question: question, model: model })
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-
-        function readStream() {
-            return reader.read().then(({ done, value }) => {
-                if (done) {
-                    showProgress(false);
-                    runQueryBtn.disabled = false;
-                    runChartBtn.disabled = false;
-                    return;
-                }
-
-                const chunk = decoder.decode(value);
-                const lines = chunk.split('\n');
-                
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        try {
-                            const data = JSON.parse(line.slice(6));
-                            handleProgressUpdate(data, 'chart');
-                        } catch (e) {
-                            console.error('Failed to parse SSE data:', e);
-                        }
-                    }
-                }
-
-                return readStream();
-            });
-        }
-
-        return readStream();
-    })
-    .catch(error => {
-        console.error('Stream error:', error);
-        showError(error.message);
-        showProgress(false);
-        runQueryBtn.disabled = false;
-        runChartBtn.disabled = false;
-    });
-}
-
-function handleProgressUpdate(data, type) {
-    const { step, message, progress } = data;
-    
-    if (step === 'error') {
-        updateProgress(step, message, progress, true);
-        showError(message);
-        return;
-    }
-    
-    updateProgress(step, message, progress);
-    
-    if (step === 'complete' && data.data) {
-        if (type === 'query') {
-            handleQueryResponse(data.data);
-        } else if (type === 'chart') {
-            handleChartResponse(data.data);
-        }
-    }
-}
-
-function handleQueryResponse(data) {
-    if (data.error) {
-        showError(data.error);
-        return;
-    }
-
-    // Display agent answer
-    if (data.answer) {
-        sqlOutput.textContent = data.answer;
-    } else {
-        sqlOutput.textContent = 'No answer returned';
-    }
-
-    // Show SQL query if returned
-    if (data.sql) {
-        sqlOutput.textContent += `\nSQL: ${data.sql}`;
-    }
-
-    // Display data rows if available
-    if (data.data && data.data.length > 0) {
-        dataOutput.textContent = JSON.stringify(data.data, null, 2);
-    } else {
-        dataOutput.textContent = 'No data returned';
-    }
-
-    // Display embedding suggestions if available
-    const suggestionsDiv = document.getElementById('embedding-suggestions');
-    if (suggestionsDiv) {
-        if (data.embedding_suggestions && data.embedding_suggestions.length > 0) {
-            let html = '<b>Embedding Suggestions:</b><ul>';
-            data.embedding_suggestions.forEach(s => {
-                html += `<li><b>Table:</b> ${s.table} <b>Score:</b> ${s.score.toFixed(3)}<br><span>${s.text}</span></li>`;
-            });
-            html += '</ul>';
-            suggestionsDiv.innerHTML = html;
-        } else {
-            suggestionsDiv.innerHTML = '';
-        }
-    }
-
-    // Switch to SQL tab to show results
-    switchTab('sql');
-}
-
-function handleChartResponse(data) {
-    if (data.error) {
-        showError(data.error);
-        return;
-    }
-
-    // Display SQL query
-    if (data.sql) {
-        sqlOutput.textContent = data.sql;
-    }
-
-    // Display data results
-    if (data.data && data.data.length > 0) {
-        dataOutput.textContent = JSON.stringify(data.data, null, 2);
-    }
-
-    // Display chart
-    if (data.vega_spec) {
-        renderChart(data.vega_spec);
-    } else {
-        chartOutput.innerHTML = 'No chart specification generated';
-    }
-
-    // Switch to chart tab to show results
-    switchTab('chart');
-}
-
-async function renderChart(vegaSpec) {
-    try {
-        // Clear previous chart
-        chartOutput.innerHTML = '';
-        chartOutput.classList.add('has-chart');
-
-        // Render the Vega-Lite chart
-        await vegaEmbed('#chart-output', vegaSpec, {
-            theme: 'quartz',
-            actions: {
-                export: true,
-                source: false,
-                compiled: false,
-                editor: false
+    // Clear cache when question changes
+    if (questionInput) {
+        questionInput.addEventListener('input', () => {
+            const currentQuestion = questionInput.value.trim();
+            if (lastQueryQuestion && lastQueryQuestion !== currentQuestion) {
+                clearCache();
             }
         });
+    }
 
-    } catch (error) {
-        console.error('Chart rendering error:', error);
-        chartOutput.innerHTML = `<div class="error">Chart rendering failed: ${error.message}</div>`;
-        chartOutput.classList.remove('has-chart');
+    // Sample questions
+    document.addEventListener('click', function(e) {
+        if (e.target.classList.contains('sample-question')) {
+            if (questionInput) {
+                questionInput.value = e.target.textContent;
+                questionInput.focus();
+            }
+        }
+    });
+
+    // Database management event listeners
+    const saveBaseUriBtn = document.getElementById('save-base-uri-btn');
+    const switchDbBtn = document.getElementById('switch-db-btn');
+    const refreshStatusBtn = document.getElementById('refresh-status-btn');
+    const databaseSwitcher = document.getElementById('database-switcher');
+
+    if (saveBaseUriBtn) {
+        saveBaseUriBtn.addEventListener('click', handleSaveBaseUri);
+    }
+    if (switchDbBtn) {
+        switchDbBtn.addEventListener('click', handleSwitchDatabase);
+    }
+    if (refreshStatusBtn) {
+        refreshStatusBtn.addEventListener('click', () => workerManager.checkWorkerStatus());
+    }
+
+    // Enter key handling
+    if (questionInput) {
+        questionInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && e.ctrlKey) {
+                executeQuery(false);
+            }
+        });
+    }
+
+    if (databaseSwitcher) {
+        databaseSwitcher.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                handleSwitchDatabase();
+            }
+        });
     }
 }
 
-function loadSampleQuestions() {
-    const samples = [
-        "Show me the top 10 customers by total revenue",
-        "What are the monthly sales trends for the last year?",
-        "Which products have the highest profit margins?",
-        "Show me the distribution of orders by region",
-        "What is the average order value by customer segment?"
-    ];
+function handleSaveBaseUri() {
+    try {
+        const baseUri = configManager.getCurrentBaseDbUri();
+        if (!baseUri) {
+            UIUtils.showError('Please enter a base database URL first');
+            return;
+        }
+        
+        const message = workerManager.saveBaseUri(baseUri);
+        UIUtils.showSuccess(message);
+    } catch (error) {
+        UIUtils.showError(error.message);
+    }
+}
 
-    // Add sample questions as placeholder rotation
-    let currentSample = 0;
+async function handleSwitchDatabase() {
+    const databaseSwitcher = document.getElementById('database-switcher');
+    if (!databaseSwitcher) return;
 
-    function rotatePlaceholder() {
-        questionInput.placeholder = `e.g., ${samples[currentSample]}`;
-        currentSample = (currentSample + 1) % samples.length;
+    const dbName = databaseSwitcher.value.trim();
+    if (!dbName) {
+        UIUtils.showError('Please enter a database name');
+        return;
     }
 
-    // Initial placeholder
-    rotatePlaceholder();
+    try {
+        const result = await workerManager.switchActiveDatabase(dbName);
+        UIUtils.showSuccess(`Database switched to: ${result.activeDb}`);
+        schemaLogger.logDatabaseSwitch(result.activeDb);
+    } catch (error) {
+        UIUtils.showError(error.message);
+    }
+}
 
-    // Rotate every 3 seconds when input is empty
-    setInterval(() => {
-        if (!questionInput.value) {
-            rotatePlaceholder();
+async function executeQuery(generateChart = false) {
+    if (!questionInput || !questionInput.value.trim()) {
+        UIUtils.showError('Please enter a question first');
+        return;
+    }
+
+    const question = questionInput.value.trim();
+    const dbUri = configManager.getCurrentDbUri();
+    const selectedModel = modelManager.getSelectedModel();
+    const useLlm = useLlmToggle ? useLlmToggle.checked : false;
+
+    if (!dbUri) {
+        UIUtils.showError('Please configure a database URI first');
+        return;
+    }
+
+    if (!selectedModel) {
+        UIUtils.showError('Please select a model first');
+        return;
+    }
+
+    // Check if we can use cached data for chart generation
+    if (generateChart && lastQueryResult && lastQueryQuestion === question && lastQueryResult.data) {
+        console.log('🔄 Using cached data for chart generation');
+        showCacheNotification();
+        await handleChartFromCache();
+        return;
+    }
+
+    console.log(`🚀 ${generateChart ? 'Generating chart' : 'Executing query'}: "${question}"`);
+
+    // Set button loading state
+    setButtonLoadingState(generateChart, true);
+    
+    showProgress(true);
+    updateProgress(0, 'Initializing query execution...');
+
+    try {
+        const endpoint = generateChart ? '/api/chart' : '/api/query';
+        
+        updateProgress(25, 'Sending request to server...');
+        
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                question: question,
+                db_uri: dbUri,
+                model: selectedModel,
+                use_llm: useLlm
+            }),
+        });
+
+        updateProgress(50, 'Processing response...');
+
+        const result = await response.json();
+        
+        updateProgress(75, 'Rendering results...');
+
+        if (response.ok) {
+            // Cache the results for potential chart generation
+            lastQueryResult = result;
+            lastQueryQuestion = question;
+            
+            handleQuerySuccess(result, generateChart);
+        } else {
+            handleQueryError(result);
         }
+
+        updateProgress(100, 'Complete!');
+        
+    } catch (error) {
+        console.error('Query execution error:', error);
+        UIUtils.showError(`Network error: ${error.message}`);
+    } finally {
+        // Reset button state
+        setButtonLoadingState(generateChart, false);
+        setTimeout(() => showProgress(false), 1000);
+    }
+}
+
+async function handleChartFromCache() {
+    try {
+        console.log('📊 Generating chart from cached data...');
+        
+        // Set button loading state for chart generation
+        setButtonLoadingState(true, true);
+        
+        showProgress(true);
+        updateProgress(30, 'Generating chart specification...', [
+            {name: 'Query Execution', completed: true},
+            {name: 'Chart Generation', completed: false},
+            {name: 'Rendering', completed: false}
+        ]);
+        
+        // Generate chart spec from cached data
+        const useLlm = useLlmToggle ? useLlmToggle.checked : false;
+        const chartResponse = await fetch('/api/chart_spec', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                question: lastQueryQuestion,
+                data: lastQueryResult.data,
+                sql: lastQueryResult.sql,
+                use_llm: useLlm
+            })
+        });
+        
+        if (chartResponse.ok) {
+            const chartResult = await chartResponse.json();
+            
+            updateProgress(70, 'Rendering chart...', [
+                {name: 'Query Execution', completed: true},
+                {name: 'Chart Generation', completed: true},
+                {name: 'Rendering', completed: false}
+            ]);
+            
+            // Combine cached data with new chart spec
+            const combinedResult = {
+                ...lastQueryResult,
+                vega_spec: chartResult.vega_spec
+            };
+            
+            handleQuerySuccess(combinedResult, true);
+            
+            updateProgress(100, 'Chart generated successfully!', [
+                {name: 'Query Execution', completed: true},
+                {name: 'Chart Generation', completed: true},
+                {name: 'Rendering', completed: true}
+            ]);
+        } else {
+            throw new Error(`Chart generation failed: ${chartResponse.status}`);
+        }
+        
+    } catch (error) {
+        console.error('Error generating chart from cache:', error);
+        UIUtils.showError(`Chart generation failed: ${error.message}`);
+        // Fallback to full query execution
+        console.log('🔄 Falling back to full query execution...');
+        clearCache();
+        executeQuery(true);
+    } finally {
+        setButtonLoadingState(true, false); // Reset chart button
+        setTimeout(() => showProgress(false), 1000);
+    }
+}
+
+function showCacheNotification() {
+    console.log('💡 Using cached query results for faster chart generation');
+    
+    // Show a small notification in the UI
+    const notification = document.createElement('div');
+    notification.className = 'cache-notification';
+    notification.innerHTML = '💡 Using cached data for faster chart generation';
+    notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: #4CAF50;
+        color: white;
+        padding: 10px 15px;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        z-index: 1000;
+        font-size: 14px;
+        animation: slideInRight 0.3s ease-out;
+    `;
+    
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.style.animation = 'slideOutRight 0.3s ease-in';
+        setTimeout(() => notification.remove(), 300);
     }, 3000);
 }
 
-// Health check function
-async function checkHealth() {
-    try {
-        const data = await fetchJson('/api/healthz');
-        console.log('Health check:', data);
-        return data.status === 'ok';
-    } catch (error) {
-        console.error('Health check failed:', error);
-        return false;
-    }
+function clearCache() {
+    lastQueryResult = null;
+    lastQueryQuestion = null;
+    console.log('🗑️ Query cache cleared');
 }
 
-// Load models from OpenRouter API
-async function loadModels() {
-    try {
-        const data = await fetchJson('/api/models');
-        if (data.models) {
-            populateModelSelect(data.models);
-        } else {
-            console.error('Failed to load models:', data.error);
-            // Fallback to default models
-            populateModelSelect([
-                { id: 'deepseek/deepseek-chat', name: 'DeepSeek Chat (Free)', is_free: true },
-                { id: 'meta-llama/llama-3.1-8b-instruct:free', name: 'Llama 3.1 8B (Free)', is_free: true },
-                { id: 'qwen/qwen-2.5-7b-instruct:free', name: 'Qwen 2.5 7B (Free)', is_free: true }
-            ]);
-        }
-    } catch (error) {
-        console.error('Error loading models:', error);
-        // Fallback to default models
-        populateModelSelect([
-            { id: 'deepseek/deepseek-chat', name: 'DeepSeek Chat (Free)', is_free: true },
-            { id: 'meta-llama/llama-3.1-8b-instruct:free', name: 'Llama 3.1 8B (Free)', is_free: true },
-            { id: 'qwen/qwen-2.5-7b-instruct:free', name: 'Qwen 2.5 7B (Free)', is_free: true }
-        ]);
-    }
-}
-
-function populateModelSelect(models) {
-    // Clear existing options
-    modelSelect.innerHTML = '';
+function setButtonLoadingState(isChart, loading) {
+    const targetBtn = isChart ? runChartBtn : runQueryBtn;
+    const otherBtn = isChart ? runQueryBtn : runChartBtn;
     
-    // Add default option
-    const defaultOption = document.createElement('option');
-    defaultOption.value = '';
-    defaultOption.textContent = 'Select a model...';
-    modelSelect.appendChild(defaultOption);
+    if (!targetBtn) return;
     
-    // Group models by free/paid
-    const freeModels = models.filter(m => m.is_free);
-    const paidModels = models.filter(m => !m.is_free);
-    
-    // Add free models first
-    if (freeModels.length > 0) {
-        const freeGroup = document.createElement('optgroup');
-        freeGroup.label = '🆓 Free Models';
-        freeModels.forEach(model => {
-            const option = document.createElement('option');
-            option.value = model.id;
-            option.textContent = `${model.name} (${model.provider})`;
-            freeGroup.appendChild(option);
-        });
-        modelSelect.appendChild(freeGroup);
-    }
-    
-    // Add paid models
-    if (paidModels.length > 0) {
-        const paidGroup = document.createElement('optgroup');
-        paidGroup.label = '💰 Paid Models';
-        paidModels.forEach(model => {
-            const option = document.createElement('option');
-            option.value = model.id;
-            option.textContent = `${model.name} (${model.provider})`;
-            paidGroup.appendChild(option);
-        });
-        modelSelect.appendChild(paidGroup);
-    }
-    
-    // Enable the select and restore saved selection
-    modelSelect.disabled = false;
-    const savedModel = localStorage.getItem('selectedModel');
-    if (savedModel && Array.from(modelSelect.options).some(option => option.value === savedModel)) {
-        modelSelect.value = savedModel;
-    } else if (freeModels.length > 0) {
-        // Default to first free model
-        modelSelect.value = freeModels[0].id;
-    }
-}
-
-// Perform initial health check
-checkHealth().then(healthy => {
-    if (!healthy) {
-        showError('Backend service is not responding. Please check the server.');
-    }
-});
-
-function setTheme(mode) {
-    if (mode === 'dark') {
-        document.body.classList.add('dark-mode');
-        if (themeToggle) {
-            themeToggle.textContent = '☀️ Light Mode';
+    if (loading) {
+        // Set loading state for active button
+        targetBtn.disabled = true;
+        targetBtn.dataset.originalText = targetBtn.textContent;
+        targetBtn.innerHTML = isChart ? 
+            '<span class="btn-spinner">⏳</span> Generating Chart...' : 
+            '<span class="btn-spinner">⏳</span> Fetching Data...';
+        
+        // Disable other button too
+        if (otherBtn) {
+            otherBtn.disabled = true;
         }
     } else {
-        document.body.classList.remove('dark-mode');
-        if (themeToggle) {
-            themeToggle.textContent = '🌙 Dark Mode';
+        // Reset both buttons
+        if (targetBtn.dataset.originalText) {
+            targetBtn.textContent = targetBtn.dataset.originalText;
+            delete targetBtn.dataset.originalText;
+        }
+        targetBtn.disabled = false;
+        
+        if (otherBtn) {
+            otherBtn.disabled = false;
         }
     }
 }
+
+function handleQuerySuccess(result, isChart) {
+    console.log('handleQuerySuccess called with:', { result, isChart });
+    if (isChart) {
+        console.log('Chart mode - vega_spec:', result.vega_spec);
+        // Switch to chart tab and render
+        UIUtils.switchTab('chart');
+        renderChart(result.vega_spec);
+        if (sqlOutput) sqlOutput.textContent = result.answer || 'Query executed successfully';
+    } else {
+        // Switch to data tab and display results
+        UIUtils.switchTab('data');
+        if (sqlOutput) sqlOutput.textContent = result.answer || 'Query executed successfully';
+        if (dataOutput) {
+            if (result.data && Array.isArray(result.data)) {
+                dataOutput.textContent = JSON.stringify(result.data, null, 2);
+            } else {
+                dataOutput.textContent = JSON.stringify(result, null, 2);
+            }
+        }
+    }
+
+    // Show embedding suggestions if available
+    if (result.embedding_suggestions) {
+        displayEmbeddingSuggestions(result.embedding_suggestions);
+    }
+}
+
+function handleQueryError(result) {
+    UIUtils.showError(`Query failed: ${result.error || result.message || 'Unknown error'}`);
+    if (sqlOutput) {
+        sqlOutput.textContent = `Error: ${result.error || result.message || 'Query execution failed'}`;
+    }
+}
+
+function renderChart(chartSpec) {
+    console.log('renderChart called with:', chartSpec);
+    if (!chartOutput) {
+        console.error('chartOutput element not found!');
+        return;
+    }
+    
+    chartOutput.innerHTML = '';
+    
+    if (chartSpec) {
+        console.log('Attempting to render chart with vegaEmbed...');
+        
+        // Safe theme detection
+        let theme = 'default';
+        try {
+            theme = UIUtils.getCurrentTheme() === 'dark' ? 'dark' : 'default';
+        } catch (e) {
+            console.warn('UIUtils.getCurrentTheme not available, using default theme');
+        }
+        
+        vegaEmbed(chartOutput, chartSpec, {
+            theme: theme,
+            actions: false
+        }).then(() => {
+            console.log('Chart rendered successfully');
+        }).catch(error => {
+            console.error('Chart rendering error:', error);
+            chartOutput.innerHTML = '<p class="error">Failed to render chart: ' + error.message + '</p>';
+        });
+    } else {
+        console.log('No chart spec provided');
+        chartOutput.innerHTML = '<p>No chart data available</p>';
+    }
+}
+
+function displayEmbeddingSuggestions(suggestions) {
+    const suggestionsDiv = document.getElementById('embedding-suggestions');
+    if (!suggestionsDiv || !suggestions || suggestions.length === 0) return;
+
+    suggestionsDiv.innerHTML = '<h4>📊 Schema Context Used:</h4>' +
+        suggestions.map(s => {
+            // Handle both strings and objects
+            if (typeof s === 'string') return `<div class="suggestion">${s}</div>`;
+            if (typeof s === 'object') return `<div class="suggestion">${JSON.stringify(s, null, 2)}</div>`;
+            return `<div class="suggestion">${String(s)}</div>`;
+        }).join('');
+}
+
+function showProgress(show = true) {
+    if (progressContainer) {
+        progressContainer.classList.toggle('hidden', !show);
+        if (!show) {
+            resetProgress();
+        }
+    }
+}
+
+function updateProgress(percentage, message, steps = []) {
+    if (progressPercentage) progressPercentage.textContent = `${percentage}%`;
+    if (progressFill) progressFill.style.width = `${percentage}%`;
+    if (progressMessage) progressMessage.textContent = message;
+    
+    if (progressSteps && steps.length > 0) {
+        progressSteps.innerHTML = steps.map(step => 
+            `<div class="progress-step ${step.completed ? 'completed' : ''}">${step.name}</div>`
+        ).join('');
+    }
+}
+
+function resetProgress() {
+    updateProgress(0, 'Initializing...', []);
+}
+
+async function loadSampleQuestions() {
+    // This can be enhanced to load from an API endpoint
+    const sampleQuestions = [
+        "Show me the top 10 customers by revenue",
+        "What's the average order value by month?",
+        "List all products with low inventory",
+        "Show sales trends over the last 6 months"
+    ];
+    
+    // Add sample questions to UI if there's a dedicated section
+    const questionsContainer = document.getElementById('sample-questions');
+    if (questionsContainer) {
+        questionsContainer.innerHTML = sampleQuestions
+            .map(q => `<button class="sample-question btn btn-outline">${q}</button>`)
+            .join('');
+    }
+}
+
+// Export functions for debugging and testing
+window.AppDebug = {
+    workerManager: () => workerManager,
+    schemaLogger: () => schemaLogger,
+    modelManager: () => modelManager,
+    configManager: () => configManager,
+    executeQuery,
+    loadSampleQuestions
+};

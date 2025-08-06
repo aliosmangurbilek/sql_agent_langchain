@@ -2,34 +2,20 @@
 # SPDX-License-Identifier: MIT
 from __future__ import annotations
 
-import json
 import logging
 import math
-import re
-import shutil
-import tempfile
-from pathlib import Path
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List
+import asyncio
 
 import sqlalchemy as sa
-from filelock import FileLock
+import asyncpg
+from pgvector.asyncpg import Vector, register_vector
 from langchain_huggingface import HuggingFaceEmbeddings
 
 from .introspector import get_metadata
 
 logger = logging.getLogger(__name__)
 
-
-# ------------------------------------------------------------
-# Desteklenen vektör depoları
-# ------------------------------------------------------------
-try:
-    from langchain_community.vectorstores import ScaNN  # noqa: N818
-except ImportError:  # pragma: no cover
-    ScaNN = None  # tip denetimi için
-from langchain_community.vectorstores import FAISS
-
-BackendT = Literal["faiss", "scann"]
 
 # ------------------------------------------------------------
 # Yardımcılar
@@ -43,166 +29,194 @@ def _safe_score(raw: float | int) -> float | None:
     except Exception:
         return None
 
-def _patch_scann_asset_paths(index_root: Path) -> None:
-    """ScaNN .pbtxt içindeki göreli asset_path değerlerini tam yola çevir."""
-    pbtxt = index_root / "scann_assets.pbtxt"
-    if not pbtxt.exists():
-        return
-    txt = pbtxt.read_text()
-    txt = re.sub(
-        r'asset_path: "([^"]+)"',
-        lambda m: f'asset_path: "{(index_root / Path(m.group(1)).name).as_posix()}"',
-        txt,
-    )
-    pbtxt.write_text(txt)
 
 # ------------------------------------------------------------
-# Ana sınıf
+# Ana sınıf - pgvector kullanır
 # ------------------------------------------------------------
 
 class DBEmbedder:
     """
     Veritabanı şemasını HuggingFace embedding'ine gömer ve
-    FAISS (✚ CPU-dostu) veya ScaNN (✚ hızlı, bazı ortamlarda dosya nazlı)
-    ile benzerlik araması sunar.
+    pgvector (PostgreSQL extension) ile benzerlik araması sunar.
+    HNSW index ve cosine similarity kullanır.
     """
 
     def __init__(
         self,
         engine: sa.Engine,
         *,
-        backend: BackendT = "faiss",
         db_name: str | None = None,
-        store_dir: str | Path = "storage/vectors",
         embedding_model: str = "intfloat/e5-large-v2",
         force_rebuild: bool = False,
     ) -> None:
-        if backend == "scann" and ScaNN is None:
-            raise RuntimeError(
-                "backend='scann' seçildi fakat *scann* paketi kurulu değil.\n"
-                "pip install scann"
-            )
-        self.backend = backend
-
+        
         raw = db_name or (engine.url.database or "default")
-        self.db_name = re.sub(r"[^0-9A-Za-z_.-]", "_", raw)
-
-        self.store_path = Path(store_dir) / f"{self.db_name}_{backend}"
-        self._embeddings = HuggingFaceEmbeddings(model_name=embedding_model, encode_kwargs={"normalize_embeddings": True})
+        self.db_name = raw.replace("-", "_").replace(".", "_")  # Simple sanitization
+        
+        self._embeddings = HuggingFaceEmbeddings(
+            model_name=embedding_model, 
+            encode_kwargs={"normalize_embeddings": True}
+        )
         self.engine = engine
 
         if force_rebuild:
             self.rebuild()
 
-    # --------------------------------------------------------
-    # İç helper’lar
-    # --------------------------------------------------------
-    def _vector_cls(self):
-        return FAISS if self.backend == "faiss" else ScaNN  # type: ignore[misc]
+    def _get_db_url_for_asyncpg(self) -> str:
+        """Convert SQLAlchemy URL to asyncpg format."""
+        url = self.engine.url
+        # Convert postgresql+asyncpg:// to postgresql://
+        return f"postgresql://{url.username}:{url.password}@{url.host}:{url.port}/{url.database}"
 
-    def _lock_path(self) -> Path:
-        return self.store_path.with_suffix(".lock")
+    async def _ensure_pgvector_table(self):
+        """Ensure schema_embeddings table exists with pgvector extension."""
+        db_url = self._get_db_url_for_asyncpg()
+        conn = await asyncpg.connect(db_url)
+        
+        try:
+            # Enable pgvector extension
+            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            
+            # Create table
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS schema_embeddings (
+                    id BIGSERIAL PRIMARY KEY,
+                    schema TEXT NOT NULL,
+                    "table" TEXT NOT NULL,
+                    embedding VECTOR(1024)
+                )
+            """)
+            
+            # Create HNSW index
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_schema_embeddings_embedding
+                    ON schema_embeddings USING hnsw (embedding vector_cosine_ops)
+                    WITH (m = 32, ef_construction = 200)
+            """)
+            
+        finally:
+            await conn.close()
 
-    def _load_local_vector(self, path: Path):
-        """Vektör deposunu yerelden yüklemek için sarmalayıcı."""
-        Vector = self._vector_cls()
-        return Vector.load_local(
-            str(path),
-            self._embeddings,
-            allow_dangerous_deserialization=True,
-        )
-
-    # --------------------------------------------------------
-    # Depo oluştur / yükle
-    # --------------------------------------------------------
     def ensure_store(self, *, force: bool = False):
-        with FileLock(str(self._lock_path())):
-            if self.store_path.exists() and not force:
-                try:
-                    return self._load_local_vector(self.store_path)
-                except Exception as exc:
-                    logger.warning("Bozuk indeks tespit edildi (%s) – yeniden inşa", exc)
+        """Ensure embeddings are stored in pgvector."""
+        # Run async operations
+        asyncio.run(self._ensure_store_async(force=force))
 
-            tmp = Path(tempfile.mkdtemp(dir=self.store_path.parent, prefix=f"{self.db_name}__"))
-            try:
-                store = self._build_store(tmp)
-                if self.store_path.exists():
-                    shutil.rmtree(self.store_path, ignore_errors=True)
-                tmp.rename(self.store_path)
-                logger.info("Yeni %s indeksi kaydedildi: %s", self.backend, self.store_path)
-                return store
-            finally:
-                if tmp.exists():
-                    shutil.rmtree(tmp, ignore_errors=True)
+    async def _ensure_store_async(self, *, force: bool = False):
+        """Async version of ensure_store."""
+        await self._ensure_pgvector_table()
+        
+        db_url = self._get_db_url_for_asyncpg()
+        conn = await asyncpg.connect(db_url)
+        await register_vector(conn)
 
-    # --------------------------------------------------------
-    def _build_store(self, path: Path):
-        logger.info("Şema embedding’i oluşturuluyor → %s (%s)", self.db_name, self.backend)
+        try:
+            # Check if we already have embeddings for this database
+            count = await conn.fetchval(
+                "SELECT COUNT(*) FROM schema_embeddings WHERE schema = $1",
+                self.db_name
+            )
 
+            if count > 0 and not force:
+                logger.info(f"✅ Found {count} existing embeddings for database: {self.db_name}")
+                return
+
+            # Rebuild embeddings
+            await self._build_embeddings(conn, force=force)
+
+        finally:
+            await conn.close()
+
+    async def _build_embeddings(self, conn: asyncpg.Connection, *, force: bool = False):
+        """Build and store embeddings in pgvector."""
+        logger.info(f"🔄 Building embeddings for database: {self.db_name}")
+        
+        if force:
+            # Clear existing embeddings for this database
+            await conn.execute(
+                "DELETE FROM schema_embeddings WHERE schema = $1",
+                self.db_name
+            )
+        
+        # Get metadata from introspector
         meta = get_metadata(self.engine)
         by_table: Dict[str, List[str]] = {}
+        
         for row in meta:
-            by_table.setdefault(row["table"], []).append(f"{row['column']} ({row['type']})")
+            schema_name = row['schema']
+            table_name = row['table']
+            qualified_table = f"{schema_name}.{table_name}"
+            by_table.setdefault(qualified_table, []).append(f"{row['column']} ({row['data_type']})")
 
-        docs = [f"passage: Table {t}: {', '.join(cols)}" for t, cols in by_table.items()]
-        metas = [{"table": t} for t in by_table]
-        Vector = self._vector_cls()
-        store = Vector.from_texts(texts=docs, embedding=self._embeddings, metadatas=metas)
-        store.save_local(str(path))
+        # Generate embeddings and store
+        for qualified_table, columns in by_table.items():
+            schema_name, table_name = qualified_table.split('.', 1)
+            text = f"passage: Table {qualified_table}: {', '.join(columns)}"
+            
+            # Generate embedding
+            embedding = self._embeddings.embed_query(text)
 
-        if self.backend == "scann":
-            _patch_scann_asset_paths(path / "index.scann")
+            # Store in pgvector using binary format
+            await conn.execute(
+                """
+                INSERT INTO schema_embeddings (schema, "table", embedding)
+                VALUES ($1, $2, $3::vector)
+                """,
+                schema_name,
+                table_name,
+                Vector(embedding),
+            )
+        
+        logger.info(f"✅ Stored {len(by_table)} table embeddings for database: {self.db_name}")
 
-        # bütünlük testi
-        self._load_local_vector(path)
-        return store
-
-    # --------------------------------------------------------
-    # Public API
-    # --------------------------------------------------------
     def similarity_search(self, query: str, k: int = 6) -> List[Dict[str, Any]]:
-        store = self.ensure_store()
-        query_text = f"query: {query}"
-        if hasattr(store, "similarity_search_with_score"):
-            hits = store.similarity_search_with_score(query_text, k=k)
-        else:
-            hits = [(doc, 0.0) for doc in store.similarity_search(query, k=k)]
+        """Search for similar tables using pgvector cosine similarity."""
+        return asyncio.run(self._similarity_search_async(query, k))
 
-        return [
-            {
-                "table": doc.metadata.get("table"),
-                "score": _safe_score(score),
-                "text": doc.page_content,
-            }
-            for doc, score in hits
-        ]
+    async def _similarity_search_async(self, query: str, k: int = 6) -> List[Dict[str, Any]]:
+        """Async version of similarity_search."""
+        query_text = f"query: {query}"
+        
+        # Generate query embedding
+        query_embedding = self._embeddings.embed_query(query_text)
+        
+        db_url = self._get_db_url_for_asyncpg()
+        conn = await asyncpg.connect(db_url)
+        await register_vector(conn)
+
+        try:
+            # Search using cosine similarity (1 - cosine_distance)
+            results = await conn.fetch(
+                """
+                SELECT
+                    schema,
+                    "table",
+                    (1 - (embedding <=> $1::vector)) AS similarity_score
+                FROM schema_embeddings
+                WHERE schema = $2
+                ORDER BY embedding <=> $1::vector
+                LIMIT $3
+                """,
+                Vector(query_embedding),
+                self.db_name,
+                k,
+            )
+
+            return [
+                {
+                    "table": f"{row['schema']}.{row['table']}",
+                    "score": _safe_score(row['similarity_score']),
+                    "text": f"Table {row['schema']}.{row['table']}"
+                }
+                for row in results
+            ]
+
+        finally:
+            await conn.close()
 
     def rebuild(self) -> None:
-        with FileLock(str(self._lock_path())):
-            if self.store_path.exists():
-                shutil.rmtree(self.store_path, ignore_errors=True)
-        self.ensure_store(force=True)
-
-    # --------------------------------------------------------
-    # CLI
-    # --------------------------------------------------------
-    @staticmethod
-    def _cli() -> None:  # pragma: no cover
-        import argparse
-
-        p = argparse.ArgumentParser(prog="db-embedder", description="DB schema embedder")
-        p.add_argument("db_uri")
-        p.add_argument("--backend", choices=["faiss", "scann"], default="faiss")
-        p.add_argument("-k", "--topk", type=int, default=3)
-        args = p.parse_args()
-
-        eng = sa.create_engine(args.db_uri)
-        emb = DBEmbedder(eng, backend=args.backend, force_rebuild=True)
-        print(json.dumps(emb.similarity_search("customer rentals 2005", k=args.topk), indent=2))
+        """Force rebuild all embeddings."""
+        asyncio.run(self._ensure_store_async(force=True))
 
     def __repr__(self) -> str:  # pragma: no cover
-        return f"<DBEmbedder {self.db_name} ({self.backend})>"
-
-
-if __name__ == "__main__":  # pragma: no cover
-    DBEmbedder._cli()
+        return f"<DBEmbedder {self.db_name} (pgvector)>"

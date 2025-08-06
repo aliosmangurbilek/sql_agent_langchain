@@ -28,9 +28,9 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from config import get_config
+from app.config import get_config
 
-from ..db.introspector import get_metadata
+from ..core.db.introspector import get_metadata
 
 # Configure logging
 logging.basicConfig(

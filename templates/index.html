@@ -18,10 +18,67 @@
         </header>
 
         <main>
+            <!-- Worker Status Panel -->
+            <section class="worker-status-section">
+                <h2>🔧 Schema Worker Status</h2>
+                <div class="status-grid">
+                    <div class="status-card worker-card">
+                        <div class="status-header">
+                            <span class="status-label">Worker</span>
+                            <span id="worker-status" class="status-indicator offline">●</span>
+                        </div>
+                        <div class="status-content">
+                            <span id="worker-status-text">Checking...</span>
+                        </div>
+                    </div>
+                    <div class="status-card active-db-card">
+                        <div class="status-header">
+                            <span class="status-label">Active DB</span>
+                            <button id="refresh-status-btn" class="btn btn-mini">🔄</button>
+                        </div>
+                        <div class="status-content">
+                            <span id="active-db-name">None</span>
+                        </div>
+                    </div>
+                    <div class="status-card cached-dbs-card">
+                        <div class="status-header">
+                            <span class="status-label">Cached DBs</span>
+                            <span id="cached-db-count" class="badge">0</span>
+                        </div>
+                        <div class="status-content">
+                            <div id="cached-db-list">No cached connections</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Database Management Section -->
+            <section class="database-section">
+                <h2>🗄️ Database Management</h2>
+                <div class="database-controls">
+                    <div class="input-group">
+                        <label for="base-db-uri">Base Database URL:</label>
+                        <div class="input-row">
+                            <input type="text" id="base-db-uri" placeholder="postgresql+asyncpg://user:pass@localhost/" value="">
+                            <button id="save-base-uri-btn" class="btn btn-secondary">Save</button>
+                        </div>
+                    </div>
+                    
+                    <div class="input-group">
+                        <label for="database-switcher">Switch Active Database:</label>
+                        <div class="input-row">
+                            <input type="text" id="database-switcher" placeholder="database_name" value="">
+                            <button id="switch-db-btn" class="btn btn-primary">Switch DB</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Traditional Configuration Section -->
             <section class="config-section">
-                <h2>Configuration</h2>
+                <h2>⚙️ Query Configuration</h2>
                 <div class="input-group">
-                    <label for="db-uri">Database URI:</label>
+                    <label for="db-uri">Current Database URI:</label>
                     <div class="input-row">
                         <input type="text" id="db-uri" placeholder="postgresql://user:pass@localhost:5432/db" value="">
                         <button id="test-connection-btn" class="btn btn-test">Test Connection</button>
@@ -46,6 +103,10 @@
                     <textarea id="question" rows="3" placeholder="e.g., Show me the top 10 customers by revenue"></textarea>
                 </div>
 
+                <div class="input-group">
+                    <label><input type="checkbox" id="use-llm"> Enhance charts with LLM</label>
+                </div>
+
                 <div class="button-group">
                     <button id="run-query" class="btn btn-primary" title="Execute the query and show SQL plus data results">🔍 Fetch Data</button>
                     <button id="run-chart" class="btn btn-secondary" title="Execute the query and display a chart from the results">📊 Generate Chart</button>
@@ -57,6 +118,7 @@
                     <button class="tab-btn active" data-tab="sql">SQL Query</button>
                     <button class="tab-btn" data-tab="data">Data Results</button>
                     <button class="tab-btn" data-tab="chart">Chart</button>
+                    <button class="tab-btn" data-tab="schema-log">Schema Log</button>
                 </div>
 
                 <div class="tab-content">
@@ -74,6 +136,20 @@
                     <div id="chart-tab" class="tab-pane">
                         <h3>Visualization</h3>
                         <div id="chart-output">No chart generated yet.</div>
+                    </div>
+
+                    <div id="schema-log-tab" class="tab-pane">
+                        <h3>📊 Real-time Schema Changes</h3>
+                        <div class="schema-log-controls">
+                            <button id="clear-schema-log" class="btn btn-secondary btn-sm">Clear Log</button>
+                            <button id="toggle-schema-monitoring" class="btn btn-primary btn-sm" data-monitoring="false">Start Monitoring</button>
+                        </div>
+                        <div id="schema-log-container" class="schema-log">
+                            <div class="log-entry info">
+                                <span class="timestamp">Ready</span>
+                                <span class="message">Schema change monitoring ready. Click "Start Monitoring" to begin.</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -96,124 +172,23 @@
                     <div id="progress-steps" class="progress-steps"></div>
                 </div>
                 
-                <div id="error" class="error hidden"></div>
+                                <div id="error" class="error hidden"></div>
+            </section>
+
+        </main>
+    </div>
+</body>
+</html>
             </section>
         </main>
     </div>
 
-    <script>
-        // Model loading functionality
-        async function loadModels() {
-            const modelSelect = document.getElementById('model-select');
-            const refreshBtn = document.getElementById('refresh-models-btn');
-            
-            // Disable during loading
-            modelSelect.disabled = true;
-            refreshBtn.disabled = true;
-            modelSelect.innerHTML = '<option value="">Loading models...</option>';
-            
-            try {
-                const response = await fetch('/api/models');
-                const result = await response.json();
-                
-                if (response.ok && result.status === 'success') {
-                    modelSelect.innerHTML = '';
-                    
-                    // Group models by type
-                    const freeModels = result.models.filter(m => m.is_free);
-                    const paidModels = result.models.filter(m => !m.is_free);
-                    
-                    // Add free models first
-                    if (freeModels.length > 0) {
-                        const freeGroup = document.createElement('optgroup');
-                        freeGroup.label = '🆓 Free Models';
-                        freeModels.forEach(model => {
-                            const option = document.createElement('option');
-                            option.value = model.id;
-                            option.textContent = `${model.name} (Free)`;
-                            if (model.description) {
-                                option.title = model.description;
-                            }
-                            freeGroup.appendChild(option);
-                        });
-                        modelSelect.appendChild(freeGroup);
-                    }
-                    
-                    // Add paid models
-                    if (paidModels.length > 0) {
-                        const paidGroup = document.createElement('optgroup');
-                        paidGroup.label = '💰 Paid Models';
-                        paidModels.forEach(model => {
-                            const option = document.createElement('option');
-                            option.value = model.id;
-                            option.textContent = `${model.name} ($${model.pricing.prompt}/1M tokens)`;
-                            if (model.description) {
-                                option.title = model.description;
-                            }
-                            paidGroup.appendChild(option);
-                        });
-                        modelSelect.appendChild(paidGroup);
-                    }
-                    
-                    // Select default model (first free model or deepseek/deepseek-chat)
-                    const defaultModel = freeModels.find(m => m.id.includes('deepseek')) || freeModels[0];
-                    if (defaultModel) {
-                        modelSelect.value = defaultModel.id;
-                    }
-                    
-                } else {
-                    modelSelect.innerHTML = '<option value="">Error loading models</option>';
-                    console.error('Failed to load models:', result.error);
-                }
-            } catch (error) {
-                modelSelect.innerHTML = '<option value="">Error loading models</option>';
-                console.error('Error loading models:', error);
-            } finally {
-                modelSelect.disabled = false;
-                refreshBtn.disabled = false;
-            }
-        }
-        
-        // Test Connection functionality
-        document.getElementById('test-connection-btn').addEventListener('click', async () => {
-            const dbUri = document.getElementById('db-uri').value;
-            const resultDiv = document.getElementById('test-connection-result');
-            
-            if (!dbUri) {
-                resultDiv.innerHTML = '<span class="error">Please enter a database URI first!</span>';
-                return;
-            }
-
-            resultDiv.innerHTML = '<span class="loading">Testing connection...</span>';
-
-            try {
-                const response = await fetch('/api/test_connection', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ db_uri: dbUri }),
-                });
-
-                const result = await response.json();
-                
-                if (response.ok) {
-                    resultDiv.innerHTML = `<span class="success">✅ Connection successful!</span>`;
-                } else {
-                    resultDiv.innerHTML = `<span class="error">❌ Connection failed: ${result.error}</span>`;
-                }
-            } catch (error) {
-                resultDiv.innerHTML = `<span class="error">❌ Error: ${error.message}</span>`;
-            }
-        });
-        
-        // Refresh models button
-        document.getElementById('refresh-models-btn').addEventListener('click', loadModels);
-        
-        // Load models when page loads
-        document.addEventListener('DOMContentLoaded', loadModels);
-    </script>
-
+    <!-- Application JavaScript modules -->
+    <script src="{{ url_for('static', filename='js/ui-utils.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/worker-manager.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/schema-logger.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/model-manager.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/config-manager.js') }}"></script>  
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

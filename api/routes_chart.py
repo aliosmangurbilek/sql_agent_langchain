@@ -63,6 +63,7 @@ def run_chart():
     db_uri = body.get("db_uri")
     question = body.get("question")
     model = body.get("model", "gpt-4o-mini")  # Default to gpt-4o-mini if not specified
+    use_llm = bool(body.get("use_llm", False))
 
     if not db_uri or not question:
         raise BadRequest("Both 'db_uri' and 'question' fields are required")
@@ -76,7 +77,7 @@ def run_chart():
             question=question,
             sql=result["sql"],
             data=result["data"],
-            use_llm=True,  # OpenAI API key varsa LLM ile üret
+            use_llm=use_llm,
         )
 
         return (
@@ -92,3 +93,61 @@ def run_chart():
     except Exception as exc:  # noqa: BLE001
         logger.exception("Chart generation failed")
         return jsonify({"error": str(exc)}), 500
+
+
+@bp.post("/chart_spec")
+def generate_chart_spec_only():
+    """
+    Generate chart specification from existing data (cache optimization).
+    
+    Body (JSON):
+    {
+      "question": "What are the top directors?",
+      "data": [...],     # Existing query data
+      "sql": "SELECT ..." # Original SQL query
+    }
+    
+    Response:
+    {
+      "vega_spec": { ... }  # Vega-Lite 5 JSON only
+    }
+    """
+    if not request.is_json:
+        raise BadRequest("Content-Type must be application/json")
+
+    body = request.get_json(silent=True) or {}
+    question = body.get("question", "")
+    data = body.get("data", [])
+    sql = body.get("sql", "")
+    use_llm = bool(body.get("use_llm", False))
+
+    if not data:
+        raise BadRequest("'data' field is required and cannot be empty")
+    
+    if not question:
+        raise BadRequest("'question' field is required")
+
+    try:
+        logger.info(f"🎨 Generating chart spec from cached data for: {question[:50]}...")
+
+        # Generate chart spec using existing data
+        vega_spec = generate_chart_spec(
+            question=question,
+            sql=sql,
+            data=data,
+            use_llm=use_llm,
+        )
+
+        logger.info(f"✅ Chart spec generated successfully ({len(data)} data points)")
+
+        return jsonify({
+            "status": "success",
+            "vega_spec": vega_spec,
+            "data_points": len(data)
+        }), 200
+
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Chart spec generation failed")
+        return jsonify({
+            "error": f"Chart specification generation failed: {str(exc)}"
+        }), 500

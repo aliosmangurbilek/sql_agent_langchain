@@ -25,6 +25,7 @@ from langchain.schema import LLMResult
 from langchain.schema.agent import AgentAction, AgentFinish
 
 from core.db.embedder import DBEmbedder
+from core.db.verify_sql import verify_sql
 
 logger = logging.getLogger(__name__)
 
@@ -39,18 +40,21 @@ class ProgressCallbackHandler(BaseCallbackHandler):
         
     def on_llm_start(self, serialized: Dict[str, Any], prompts: list[str], **kwargs) -> None:
         """Called when LLM starts generating."""
+        # serialized, prompts, kwargs intentionally unused - required by LangChain interface
         self.current_step += 1
         progress = min(30 + (self.current_step * 10), 70)
         self.progress_callback("llm_thinking", "AI is analyzing your question...", progress)
         
     def on_llm_end(self, response: LLMResult, **kwargs) -> None:
         """Called when LLM finishes generating."""
+        # response, kwargs intentionally unused - required by LangChain interface
         self.current_step += 1
         progress = min(40 + (self.current_step * 8), 75)
         self.progress_callback("llm_response", "AI has generated a response...", progress)
         
     def on_agent_action(self, action: AgentAction, **kwargs) -> None:
         """Called when agent is about to execute an action."""
+        # kwargs intentionally unused - required by LangChain interface
         tool_name = action.tool
         self.current_step += 1
         
@@ -69,6 +73,7 @@ class ProgressCallbackHandler(BaseCallbackHandler):
             
     def on_agent_finish(self, finish: AgentFinish, **kwargs) -> None:
         """Called when agent finishes."""
+        # finish, kwargs intentionally unused - required by LangChain interface  
         self.progress_callback("agent_complete", "Agent execution completed!", 90)
 
 
@@ -84,9 +89,11 @@ class LoggingSQLDatabase(SQLDatabase):
         parameters: Dict[str, Any] | None = None,
         execution_options: Dict[str, Any] | None = None,
     ) -> sa.engine.Result | str | list[Dict[str, Any]]:
-        self.last_query = str(command)
+        raw_sql = str(command)
+        safe_sql = verify_sql(raw_sql, engine=self._engine, auto_limit=True)
+        self.last_query = safe_sql
         result = self._execute(
-            command,
+            sa.text(safe_sql),
             fetch,
             parameters=parameters,
             execution_options=execution_options,
@@ -149,6 +156,8 @@ class QueryEngine:
             base_url="https://openrouter.ai/api/v1",
             model=llm_model,
             temperature=0.0,
+            max_tokens=4000,
+            timeout=30,
             default_headers={
                 "HTTP-Referer": "https://github.com/openrouter-chat/openrouter-langchain",
                 "X-Title": "LangChain SQL Agent"
@@ -185,10 +194,32 @@ class QueryEngine:
             if t and not t.startswith("information_schema.")
         ]
 
-        logger.info(f"Sorgu için ilgili tablolar bulundu: {user_tables}")
+        logger.info(f"🔍 Embedder'dan gelen tablolar: {qualified_table_names}")
+        logger.info(f"📋 Sorgu için ilgili tablolar bulundu: {user_tables}")
+        logger.info(f"🔗 Database URI: {self.db_uri}")
+        
+        # Debug: Veritabanında gerçekte hangi tablolar var?
+        try:
+            with self.engine.connect() as conn:
+                # Mevcut schema'yı kontrol et
+                current_schema = conn.execute(sa.text("SELECT current_schema()")).scalar()
+                logger.info(f"📍 Current schema: {current_schema}")
+                
+                # Tüm tabloları listele
+                all_tables = conn.execute(sa.text("""
+                    SELECT table_schema, table_name 
+                    FROM information_schema.tables 
+                    WHERE table_type = 'BASE TABLE'
+                    AND table_schema NOT IN ('information_schema', 'pg_catalog')
+                    ORDER BY table_schema, table_name
+                """)).fetchall()
+                
+                logger.info(f"🗄️ Veritabanındaki tüm tablolar: {[(t[0], t[1]) for t in all_tables]}")
+                
+        except Exception as e:
+            logger.error(f"❌ Debug sorgusu başarısız: {e}")
 
         schema_name = None
-        unqualified_table_names = []
 
         if user_tables:
             # Şema ve tablo adlarını ayır
@@ -196,16 +227,34 @@ class QueryEngine:
             schemas = {t.split('.')[0] for t in user_tables if '.' in t}
             if schemas:
                 schema_name = list(schemas)[0]
-
-            unqualified_table_names = [t.split('.')[1] if '.' in t else t for t in user_tables]
+                # Schema belirtildiğinde include_tables kullanmıyoruz
+                # Çünkü schema içindeki tablolar otomatik olarak dahil ediliyor
+                logger.info(f"✅ Schema tespit edildi: {schema_name}, tüm tablolar dahil edilecek")
+            else:
+                # Schema yok, sadece tablo isimleri var - bunları include_tables olarak kullan
+                logger.info(f"⚠️ Schema yok, sadece tablolar: {user_tables}")
 
         # Sadece ilgili tabloları içeren bir SQLDatabase nesnesi oluştur
-        db = LoggingSQLDatabase.from_uri(
-            self.db_uri,
-            schema=schema_name,
-            include_tables=unqualified_table_names,
-            sample_rows_in_table_info=3,
-        )
+        if schema_name:
+            # Schema var - include_tables kullanmadan schema'daki tüm tabloları al
+            db = LoggingSQLDatabase.from_uri(
+                self.db_uri,
+                schema=schema_name,
+                sample_rows_in_table_info=3,
+            )
+        elif user_tables:
+            # Schema yok ama tablo listesi var - include_tables kullan
+            db = LoggingSQLDatabase.from_uri(
+                self.db_uri,
+                include_tables=user_tables,
+                sample_rows_in_table_info=3,
+            )
+        else:
+            # Ne schema ne de tablo listesi - tüm tabloları al
+            db = LoggingSQLDatabase.from_uri(
+                self.db_uri,
+                sample_rows_in_table_info=3,
+            )
 
         toolkit = SQLDatabaseToolkit(db=db, llm=self.llm)
         agent = create_sql_agent(
@@ -218,11 +267,14 @@ class QueryEngine:
         result = agent.invoke({"input": nl_query}, config={"callbacks": callbacks})
         answer = result.get("output", "") if isinstance(result, dict) else str(result)
 
+        generated_sql = getattr(db, "last_query", "")
+        safe_sql = verify_sql(generated_sql, engine=self.engine)
+
         rows = getattr(db, "last_result", [])
 
         return {
             "answer": answer,
-            "sql": getattr(db, "last_query", ""),
+            "sql": safe_sql,
             "data": rows,
             "rowcount": len(rows),
         }

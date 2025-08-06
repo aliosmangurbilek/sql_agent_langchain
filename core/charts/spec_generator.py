@@ -12,15 +12,15 @@ Heuristikler
 3. Yalnızca iki sayısal alan → Scatter plot
 4. Diğer durumlar → Tablo (arkaplanda bar gömme)
 
-`use_llm=True` parametresi verilirse (ve ortamda OPENAI_API_KEY varsa)
-heuristik çıktıyı prompt'layarak ChatGPT'den iyileştirilmiş spec alınır.
-OPENAI_API_KEY ortam değişkeni ayarlıysa, OpenAI API ile daha iyi grafik
-spec'i üretmek için LLM kullanılır.
+`use_llm=True` parametresi verilirse (varsayılan **False** ve ortamda
+OPENAI_API_KEY varsa) heuristik çıktıyı prompt'layarak ChatGPT'den
+iyileştirilmiş spec alınır. OPENAI_API_KEY ortam değişkeni ayarlıysa,
+OpenAI API ile daha iyi grafik spec'i üretmek için LLM kullanılır.
 
 Kullanım:
 ---------
+generate_chart_spec(..., use_llm=False) # Sadece heuristik (varsayılan)
 generate_chart_spec(..., use_llm=True)  # OpenAI API key ile LLM destekli
-generate_chart_spec(..., use_llm=False) # Sadece heuristik
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ def generate_chart_spec(
     sql: str,
     data: List[Dict[str, Any]],
     *,
-    use_llm: bool = True,
+    use_llm: bool = False,
 ) -> Dict[str, Any]:
     """
     Heuristik (ve isteğe bağlı LLM) tabanlı Vega-Lite spec üret.
