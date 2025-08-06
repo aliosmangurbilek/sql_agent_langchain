@@ -200,6 +200,7 @@ async def schema_listener() -> None:
 
         def notification_handler(connection, pid, channel, payload):
             """Handle incoming notifications."""
+            # connection, pid, channel intentionally unused - required by asyncpg interface
             try:
                 queue.put_nowait(payload)
             except Exception as e:
@@ -246,6 +247,7 @@ async def cleanup_connections() -> None:
 
 def signal_handler(signum, frame):
     """Handle shutdown signals."""
+    # frame intentionally unused - required by signal handler interface
     logger.info(f"🛑 Received signal {signum}, initiating shutdown...")
     shutdown_event.set()
 

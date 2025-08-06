@@ -39,18 +39,21 @@ class ProgressCallbackHandler(BaseCallbackHandler):
         
     def on_llm_start(self, serialized: Dict[str, Any], prompts: list[str], **kwargs) -> None:
         """Called when LLM starts generating."""
+        # serialized, prompts, kwargs intentionally unused - required by LangChain interface
         self.current_step += 1
         progress = min(30 + (self.current_step * 10), 70)
         self.progress_callback("llm_thinking", "AI is analyzing your question...", progress)
         
     def on_llm_end(self, response: LLMResult, **kwargs) -> None:
         """Called when LLM finishes generating."""
+        # response, kwargs intentionally unused - required by LangChain interface
         self.current_step += 1
         progress = min(40 + (self.current_step * 8), 75)
         self.progress_callback("llm_response", "AI has generated a response...", progress)
         
     def on_agent_action(self, action: AgentAction, **kwargs) -> None:
         """Called when agent is about to execute an action."""
+        # kwargs intentionally unused - required by LangChain interface
         tool_name = action.tool
         self.current_step += 1
         
@@ -69,6 +72,7 @@ class ProgressCallbackHandler(BaseCallbackHandler):
             
     def on_agent_finish(self, finish: AgentFinish, **kwargs) -> None:
         """Called when agent finishes."""
+        # finish, kwargs intentionally unused - required by LangChain interface  
         self.progress_callback("agent_complete", "Agent execution completed!", 90)
 
 

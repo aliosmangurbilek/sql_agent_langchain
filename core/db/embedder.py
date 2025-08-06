@@ -195,22 +195,5 @@ class DBEmbedder:
                 shutil.rmtree(self.store_path, ignore_errors=True)
         self.ensure_store(force=True)
 
-    # --------------------------------------------------------
-    # CLI
-    # --------------------------------------------------------
-    @staticmethod
-    def _cli() -> None:  # pragma: no cover
-        import argparse
-
-        p = argparse.ArgumentParser(prog="db-embedder", description="DB schema embedder")
-        p.add_argument("db_uri")
-        p.add_argument("--backend", choices=["faiss", "scann"], default="faiss")
-        p.add_argument("-k", "--topk", type=int, default=3)
-        args = p.parse_args()
-
-        eng = sa.create_engine(args.db_uri)
-        emb = DBEmbedder(eng, backend=args.backend, force_rebuild=True)
-        print(json.dumps(emb.similarity_search("customer rentals 2005", k=args.topk), indent=2))
-
     def __repr__(self) -> str:  # pragma: no cover
         return f"<DBEmbedder {self.db_name} ({self.backend})>"
