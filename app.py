@@ -30,6 +30,7 @@ from api.routes_health import bp as health_bp
 from api.routes_sse import bp as sse_bp
 from api.routes_worker import bp as worker_bp
 from api.routes_connection import bp as connection_bp
+from api.routes_models import bp as models_bp
 from config import AppConfig
 
 def create_app() -> Flask:
@@ -51,6 +52,7 @@ def create_app() -> Flask:
     app.register_blueprint(query_bp)
     app.register_blueprint(chart_bp)
     app.register_blueprint(health_bp, url_prefix='/api')
+    app.register_blueprint(models_bp)  # New models blueprint
     app.register_blueprint(sse_bp)
     app.register_blueprint(worker_bp)
     app.register_blueprint(connection_bp)
