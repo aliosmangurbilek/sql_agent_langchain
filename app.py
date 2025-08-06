@@ -43,6 +43,15 @@ def create_app() -> Flask:
             level=logging.DEBUG,
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         )
+    
+    # Ensure all loggers show DEBUG messages
+    logging.getLogger('api.routes_query').setLevel(logging.DEBUG)
+    logging.getLogger('core.db.query_engine').setLevel(logging.DEBUG)
+    logging.getLogger('core.db.embedder').setLevel(logging.DEBUG)
+    
+    # Test logging
+    logging.info("🔧 Logging configuration completed")
+    logging.debug("🔍 Debug logging is active")
 
     # Load configuration
     config = AppConfig()

@@ -34,3 +34,5 @@ core/worker/__pycache__/listen_and_refresh.cpython-312.pyc
 .idea/copilotDiffState.xml
 .idea/workspace.xml
 .idea/workspace.xml
+core/db/__pycache__/connection_test.cpython-312-pytest-8.4.1.pyc
+.idea/workspace.xml
