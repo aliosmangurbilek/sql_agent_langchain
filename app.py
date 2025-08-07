@@ -141,3 +141,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logging.info("🛑 Shutting down services...")
         logging.info("👋 Application stopped")
+
