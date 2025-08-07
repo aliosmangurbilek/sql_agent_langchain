@@ -44,27 +44,36 @@ __all__ = [
 # Exceptions
 # ---------------------------------------------------------------------------
 
+
 class SQLValidationError(RuntimeError):
     """Base class for *all* validation failures."""
+
 
 class UnsafeSQLError(SQLValidationError):
     """Statement contains a mutating operation (INSERT/UPDATE/DELETE/DDL)."""
 
+
 class MultipleStatementsError(SQLValidationError):
     """More than one statement detected (e.g. a semicolon chain)."""
 
+
 class HighCostSQLError(SQLValidationError):
     """`EXPLAIN` cost estimate exceeds the configured threshold."""
+
 
 # ---------------------------------------------------------------------------
 # Validators
 # ---------------------------------------------------------------------------
 
-_MUTATION_REGEX = re.compile(r"\b(INSERT|UPDATE|DELETE|MERGE|DROP|ALTER|TRUNCATE|CREATE)\b", re.I)
-_SELECT_REGEX   = re.compile(r"\b(SELECT|WITH|EXPLAIN)\b", re.I)  # Allow WITH and EXPLAIN statements
-_LIMIT_REGEX    = re.compile(r"\bLIMIT\b", re.I)
+_MUTATION_REGEX = re.compile(
+    r"\b(INSERT|UPDATE|DELETE|MERGE|DROP|ALTER|TRUNCATE|CREATE)\b", re.I
+)
+_SELECT_REGEX = re.compile(
+    r"\b(SELECT|WITH|EXPLAIN)\b", re.I
+)  # Allow WITH and EXPLAIN statements
+_LIMIT_REGEX = re.compile(r"\bLIMIT\b", re.I)
 
-_DEFAULT_LIMIT  = 1000
+_DEFAULT_LIMIT = 1000
 _DEFAULT_MAX_COST = 1_000_000  # arbitrary sane default for Postgres cost units
 
 
@@ -78,14 +87,16 @@ def _check_read_only(raw_sql: str) -> None:
     # Check for dangerous mutations
     if _MUTATION_REGEX.search(raw_sql):
         raise UnsafeSQLError("Only read‑only (SELECT) queries are permitted.")
-    
+
     # Allow SELECT, WITH (CTE), and EXPLAIN statements
     sql_upper = raw_sql.upper().strip()
-    
+
     # Check if it's a read-only statement
-    if not (_SELECT_REGEX.search(raw_sql) or 
-            sql_upper.startswith("WITH ") or 
-            sql_upper.startswith("EXPLAIN")):
+    if not (
+        _SELECT_REGEX.search(raw_sql)
+        or sql_upper.startswith("WITH ")
+        or sql_upper.startswith("EXPLAIN")
+    ):
         raise UnsafeSQLError("Query does not appear to be a read-only statement.")
 
 
@@ -114,12 +125,15 @@ def _check_cost(sql: str, engine: sa.Engine, max_cost: int) -> None:
             f"EXPLAIN estimated cost {max(costs):,.0f} exceeds {max_cost:,}."  # noqa: E501
         )
 
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def verify_sql(
     raw_sql: str,
+    enforce_read_only: bool = True,
     *,
     engine: Optional[sa.Engine] = None,
     auto_limit: bool = True,
@@ -150,17 +164,27 @@ def verify_sql(
         The *possibly modified* SQL string (e.g. LIMIT appended).
     """
     sql = raw_sql.strip()
+    # If there's no SQL to validate, return as-is
+    if not sql:
+        return sql
 
     # 1️⃣ structural checks
     _check_single_statement(sql)
-    _check_read_only(sql)
+    if enforce_read_only:
+        # enforce read-only operations
+        _check_read_only(sql)
 
-    # 2️⃣ optional rewrite
-    if auto_limit:
+    # 2️⃣ optional rewrite (append LIMIT only for read-only queries)
+    if enforce_read_only and auto_limit:
         sql = _maybe_append_limit(sql, limit)
 
-    # 3️⃣ optional cost guard
-    if cost_guard:
+    # 3️⃣ optional cost guard (only for SELECT/CTE/EXPLAIN statements)
+    sql_upper = sql.upper().strip()
+    if cost_guard and (
+        sql_upper.startswith("SELECT")
+        or sql_upper.startswith("WITH")
+        or sql_upper.startswith("EXPLAIN")
+    ):
         if engine is None:
             raise SQLValidationError("Engine required for cost guard but not provided.")
         _check_cost(sql, engine, max_cost)

@@ -29,30 +29,32 @@ bp = Blueprint("sse", __name__, url_prefix="/api")
 
 class ProgressTracker:
     """Thread-safe progress tracker for SSE updates."""
-    
+
     def __init__(self):
         self.progress_queue = Queue()
         self.is_complete = False
         self.error = None
         self.result = None
-        
+
     def update(self, step: str, message: str, progress: int, data: Any = None):
         """Add a progress update to the queue."""
-        self.progress_queue.put({
-            "step": step,
-            "message": message,
-            "progress": progress,
-            "timestamp": time.time(),
-            "data": data
-        })
-        
+        self.progress_queue.put(
+            {
+                "step": step,
+                "message": message,
+                "progress": progress,
+                "timestamp": time.time(),
+                "data": data,
+            }
+        )
+
         if step == "complete":
             self.is_complete = True
             self.result = data
         elif step == "error":
             self.error = message
             self.is_complete = True
-            
+
     def get_updates(self) -> Generator[Dict, None, None]:
         """Generator that yields progress updates."""
         last_ping = time.time()
@@ -70,7 +72,7 @@ class ProgressTracker:
                         "timestamp": time.time(),
                     }
                     last_ping = time.time()
-                
+
         # Yield any remaining updates
         while not self.progress_queue.empty():
             try:
@@ -87,34 +89,36 @@ def emit_progress(step: str, message: str, progress: int = 0, data: Any = None) 
         "step": step,
         "message": message,
         "progress": progress,
-        "timestamp": time.time()
+        "timestamp": time.time(),
     }
     if data is not None:
         event_data["data"] = data
-    
+
     return f"data: {json.dumps(event_data, cls=CustomJSONEncoder)}\n\n"
 
 
-def execute_query_in_background(db_uri: str, question: str, model: str, tracker: ProgressTracker):
+def execute_query_in_background(
+    db_uri: str, question: str, model: str, tracker: ProgressTracker
+):
     """Execute query in a background thread with progress tracking."""
     try:
         tracker.update("start", "Starting query processing...", 0)
-        
+
         # Step 1: Initialize query engine
         tracker.update("init", "Initializing query engine...", 10)
         qe = QueryEngine(db_uri, llm_model=model)
-        
+
         # Step 2: Create progress callback
         def progress_callback(step: str, message: str, progress: int):
             tracker.update(step, message, progress)
-        
+
         # Step 3: Execute query
         tracker.update("agent_start", "Starting AI agent...", 20)
         result = qe.ask(question, progress_callback=progress_callback)
-        
+
         # Step 4: Complete
         tracker.update("complete", "Query completed successfully!", 100, result)
-        
+
     except Exception as e:
         logger.exception("Query processing failed")
         tracker.update("error", f"Error: {str(e)}", -1)
@@ -130,17 +134,17 @@ def execute_chart_in_background(
         # Step 1: Initialize query engine
         tracker.update("init", "Initializing query engine...", 10)
         qe = QueryEngine(db_uri, llm_model=model)
-        
+
         # Step 2: Create progress callback
         def progress_callback(step: str, message: str, progress: int):
             # Adjust progress for chart generation (reserve 15% for chart creation)
             adjusted_progress = min(progress * 0.85, 85)
             tracker.update(step, message, int(adjusted_progress))
-        
+
         # Step 3: Execute query
         tracker.update("agent_start", "Starting AI agent...", 20)
         result = qe.ask(question, progress_callback=progress_callback)
-        
+
         # Step 4: Chart generation
         tracker.update("chart_gen", "Generating chart specification...", 90)
         vega_spec = generate_chart_spec(
@@ -149,28 +153,29 @@ def execute_chart_in_background(
             data=result["data"],
             use_llm=use_llm,
         )
-        
+
         # Step 5: Complete
         final_result = {**result, "vega_spec": vega_spec}
         tracker.update("complete", "Chart generated successfully!", 100, final_result)
-        
+
     except Exception as e:
         logger.exception("Chart generation failed")
         tracker.update("error", f"Error: {str(e)}", -1)
 
 
-def process_query_with_progress(db_uri: str, question: str, model: str) -> Generator[str, None, None]:
+def process_query_with_progress(
+    db_uri: str, question: str, model: str
+) -> Generator[str, None, None]:
     """Process a query with progress updates using background thread."""
     tracker = ProgressTracker()
-    
+
     # Start background thread
     thread = threading.Thread(
-        target=execute_query_in_background,
-        args=(db_uri, question, model, tracker)
+        target=execute_query_in_background, args=(db_uri, question, model, tracker)
     )
     thread.daemon = True
     thread.start()
-    
+
     # Stream progress updates
     for update in tracker.get_updates():
         if update["step"] != "heartbeat":  # Don't emit heartbeat messages
@@ -178,18 +183,20 @@ def process_query_with_progress(db_uri: str, question: str, model: str) -> Gener
                 update["step"],
                 update["message"],
                 update["progress"],
-                update.get("data")
+                update.get("data"),
             )
 
 
-def process_chart_with_progress(db_uri: str, question: str, model: str, use_llm: bool) -> Generator[str, None, None]:
+def process_chart_with_progress(
+    db_uri: str, question: str, model: str, use_llm: bool
+) -> Generator[str, None, None]:
     """Process a chart generation with progress updates using background thread."""
     tracker = ProgressTracker()
 
     # Start background thread
     thread = threading.Thread(
         target=execute_chart_in_background,
-        args=(db_uri, question, model, use_llm, tracker)
+        args=(db_uri, question, model, use_llm, tracker),
     )
     thread.daemon = True
     thread.start()
@@ -201,7 +208,7 @@ def process_chart_with_progress(db_uri: str, question: str, model: str, use_llm:
                 update["step"],
                 update["message"],
                 update["progress"],
-                update.get("data")
+                update.get("data"),
             )
 
 
@@ -229,7 +236,7 @@ def query_stream():
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "Access-Control-Allow-Origin": "*",
-        }
+        },
     )
 
 
@@ -258,5 +265,5 @@ def chart_stream():
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "Access-Control-Allow-Origin": "*",
-        }
+        },
     )

@@ -15,10 +15,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import signal
 import sys
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import asyncpg
 import uvicorn
@@ -34,8 +33,7 @@ from ..db.introspector import get_metadata
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -74,7 +72,7 @@ async def get_status():
     return {
         "status": "running",
         "active_db": ACTIVE_DB,
-        "cached_connections": list(connection_cache.keys())
+        "cached_connections": list(connection_cache.keys()),
     }
 
 
@@ -116,7 +114,9 @@ async def get_handles(db_name: str) -> Tuple[AsyncEngine, asyncpg.Connection]:
     return engine, conn
 
 
-async def refresh_embeddings(engine: AsyncEngine, schema: str, table: str, vectors: List[List[float]]) -> None:
+async def refresh_embeddings(
+    engine: AsyncEngine, schema: str, table: str, vectors: List[List[float]]
+) -> None:
     """Refresh embeddings for a specific table."""
     async with engine.begin() as conn:
         # Delete existing embeddings for this table
@@ -127,7 +127,9 @@ async def refresh_embeddings(engine: AsyncEngine, schema: str, table: str, vecto
 
         # Insert new embeddings
         if vectors:
-            ins = text('INSERT INTO schema_embeddings(schema, "table", embedding) VALUES (:s, :t, :e)')
+            ins = text(
+                'INSERT INTO schema_embeddings(schema, "table", embedding) VALUES (:s, :t, :e)'
+            )
             for vec in vectors:
                 await conn.execute(ins, {"s": schema, "t": table, "e": vec})
 
@@ -161,7 +163,8 @@ async def handle_notification(payload: str) -> None:
 
         # Get metadata for the affected table
         rows = [
-            r for r in get_metadata(engine.sync_engine)
+            r
+            for r in get_metadata(engine.sync_engine)
             if r["schema"] == schema and r["table"] == table
         ]
 
@@ -176,7 +179,9 @@ async def handle_notification(payload: str) -> None:
             ]
             vectors = embedding_model.embed_documents(texts)
             await refresh_embeddings(engine, schema, table, vectors)
-            logger.info(f"✅ Refreshed embeddings for {schema}.{table} ({len(vectors)} vectors)")
+            logger.info(
+                f"✅ Refreshed embeddings for {schema}.{table} ({len(vectors)} vectors)"
+            )
 
     except Exception as e:
         logger.error(f"❌ Error handling notification: {e}", exc_info=True)
@@ -255,11 +260,7 @@ def signal_handler(signum, frame):
 async def run_fastapi_server():
     """Run FastAPI server for /set_db endpoint."""
     config = uvicorn.Config(
-        app=app,
-        host="0.0.0.0",
-        port=9500,
-        log_level="info",
-        access_log=False
+        app=app, host="0.0.0.0", port=9500, log_level="info", access_log=False
     )
     server = uvicorn.Server(config)
 
@@ -286,9 +287,7 @@ async def main(enable_signals=True) -> None:
     try:
         # Run both the schema listener and FastAPI server concurrently
         await asyncio.gather(
-            schema_listener(),
-            run_fastapi_server(),
-            return_exceptions=True
+            schema_listener(), run_fastapi_server(), return_exceptions=True
         )
     except Exception as e:
         logger.error(f"Main worker error: {e}", exc_info=True)

@@ -70,7 +70,7 @@ def run_chart():
 
     try:
         qe = _get_engine(db_uri, llm_model=model)
-        result = qe.ask(question)              # {"sql", "data", "rowcount"}
+        result = qe.ask(question)  # {"sql", "data", "rowcount"}
 
         # Grafik spec'ini üret
         vega_spec = generate_chart_spec(
@@ -83,7 +83,7 @@ def run_chart():
         return (
             jsonify(
                 {
-                    **result,         # sql, data, rowcount
+                    **result,  # sql, data, rowcount
                     "vega_spec": vega_spec,
                 }
             ),
@@ -99,14 +99,14 @@ def run_chart():
 def generate_chart_spec_only():
     """
     Generate chart specification from existing data (cache optimization).
-    
+
     Body (JSON):
     {
       "question": "What are the top directors?",
       "data": [...],     # Existing query data
       "sql": "SELECT ..." # Original SQL query
     }
-    
+
     Response:
     {
       "vega_spec": { ... }  # Vega-Lite 5 JSON only
@@ -123,12 +123,14 @@ def generate_chart_spec_only():
 
     if not data:
         raise BadRequest("'data' field is required and cannot be empty")
-    
+
     if not question:
         raise BadRequest("'question' field is required")
 
     try:
-        logger.info(f"🎨 Generating chart spec from cached data for: {question[:50]}...")
+        logger.info(
+            f"🎨 Generating chart spec from cached data for: {question[:50]}..."
+        )
 
         # Generate chart spec using existing data
         vega_spec = generate_chart_spec(
@@ -140,14 +142,16 @@ def generate_chart_spec_only():
 
         logger.info(f"✅ Chart spec generated successfully ({len(data)} data points)")
 
-        return jsonify({
-            "status": "success",
-            "vega_spec": vega_spec,
-            "data_points": len(data)
-        }), 200
+        return (
+            jsonify(
+                {"status": "success", "vega_spec": vega_spec, "data_points": len(data)}
+            ),
+            200,
+        )
 
     except Exception as exc:  # noqa: BLE001
         logger.exception("Chart spec generation failed")
-        return jsonify({
-            "error": f"Chart specification generation failed: {str(exc)}"
-        }), 500
+        return (
+            jsonify({"error": f"Chart specification generation failed: {str(exc)}"}),
+            500,
+        )

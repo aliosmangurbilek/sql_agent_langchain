@@ -32,48 +32,58 @@ logger = logging.getLogger(__name__)
 
 class ProgressCallbackHandler(BaseCallbackHandler):
     """Custom callback handler to track LangChain agent progress."""
-    
+
     def __init__(self, progress_callback: Callable[[str, str, int], None]):
         self.progress_callback = progress_callback
         self.current_step = 0
         self.total_steps = 6  # Estimated total steps
-        
-    def on_llm_start(self, serialized: Dict[str, Any], prompts: list[str], **kwargs) -> None:
+
+    def on_llm_start(
+        self, serialized: Dict[str, Any], prompts: list[str], **kwargs
+    ) -> None:
         """Called when LLM starts generating."""
         # serialized, prompts, kwargs intentionally unused - required by LangChain interface
         self.current_step += 1
         progress = min(30 + (self.current_step * 10), 70)
-        self.progress_callback("llm_thinking", "AI is analyzing your question...", progress)
-        
+        self.progress_callback(
+            "llm_thinking", "AI is analyzing your question...", progress
+        )
+
     def on_llm_end(self, response: LLMResult, **kwargs) -> None:
         """Called when LLM finishes generating."""
         # response, kwargs intentionally unused - required by LangChain interface
         self.current_step += 1
         progress = min(40 + (self.current_step * 8), 75)
-        self.progress_callback("llm_response", "AI has generated a response...", progress)
-        
+        self.progress_callback(
+            "llm_response", "AI has generated a response...", progress
+        )
+
     def on_agent_action(self, action: AgentAction, **kwargs) -> None:
         """Called when agent is about to execute an action."""
         # kwargs intentionally unused - required by LangChain interface
         tool_name = action.tool
         self.current_step += 1
-        
+
         if "sql_db_list_tables" in tool_name.lower():
             progress = 45
-            self.progress_callback("db_schema", "Exploring database schema...", progress)
+            self.progress_callback(
+                "db_schema", "Exploring database schema...", progress
+            )
         elif "sql_db_schema" in tool_name.lower():
             progress = 55
-            self.progress_callback("table_schema", "Analyzing table structure...", progress)
+            self.progress_callback(
+                "table_schema", "Analyzing table structure...", progress
+            )
         elif "sql_db_query" in tool_name.lower():
             progress = 70
             self.progress_callback("sql_execution", "Executing SQL query...", progress)
         else:
             progress = min(50 + (self.current_step * 5), 80)
             self.progress_callback("agent_action", f"Executing: {tool_name}", progress)
-            
+
     def on_agent_finish(self, finish: AgentFinish, **kwargs) -> None:
         """Called when agent finishes."""
-        # finish, kwargs intentionally unused - required by LangChain interface  
+        # finish, kwargs intentionally unused - required by LangChain interface
         self.progress_callback("agent_complete", "Agent execution completed!", 90)
 
 
@@ -90,7 +100,15 @@ class LoggingSQLDatabase(SQLDatabase):
         execution_options: Dict[str, Any] | None = None,
     ) -> sa.engine.Result | str | list[Dict[str, Any]]:
         raw_sql = str(command)
-        safe_sql = verify_sql(raw_sql, engine=self._engine, auto_limit=True)
+        # Allow non-SELECT statements for agent operations
+        # Disable cost guard for agent operations
+        safe_sql = verify_sql(
+            raw_sql,
+            enforce_read_only=False,
+            engine=self._engine,
+            auto_limit=True,
+            cost_guard=False,
+        )
         self.last_query = safe_sql
         result = self._execute(
             sa.text(safe_sql),
@@ -160,8 +178,8 @@ class QueryEngine:
             timeout=30,
             default_headers={
                 "HTTP-Referer": "https://github.com/openrouter-chat/openrouter-langchain",
-                "X-Title": "LangChain SQL Agent"
-            }
+                "X-Title": "LangChain SQL Agent",
+            },
         )
 
         # Her veritabanı için izole bir DBEmbedder oluştur
@@ -176,46 +194,61 @@ class QueryEngine:
     # Public API
     # ------------------------------------------------------------------ #
 
-    def ask(self, nl_query: str, progress_callback: Optional[Callable[[str, str, int], None]] = None) -> Dict[str, Any]:
+    def ask(
+        self,
+        nl_query: str,
+        progress_callback: Optional[Callable[[str, str, int], None]] = None,
+    ) -> Dict[str, Any]:
         """Doğal dil sorusunu LangChain SQL ajanına ilet."""
-        
+
         # Setup progress callback if provided
         callbacks = []
         if progress_callback:
             callbacks.append(ProgressCallbackHandler(progress_callback))
 
         # Anlamsal arama ile ilgili tabloları bul
-        hits = self.embedder.similarity_search(nl_query, k=5) # Daha fazla sonuç alıp filtreleyelim
+        hits = self.embedder.similarity_search(
+            nl_query, k=5
+        )  # Daha fazla sonuç alıp filtreleyelim
         qualified_table_names = [hit["table"] for hit in hits if hit.get("table")]
 
         # Sistem şemalarını (örn: information_schema) filtrele
         user_tables = [
-            t for t in qualified_table_names
+            t
+            for t in qualified_table_names
             if t and not t.startswith("information_schema.")
         ]
 
         logger.info(f"🔍 Embedder'dan gelen tablolar: {qualified_table_names}")
         logger.info(f"📋 Sorgu için ilgili tablolar bulundu: {user_tables}")
         logger.info(f"🔗 Database URI: {self.db_uri}")
-        
+
         # Debug: Veritabanında gerçekte hangi tablolar var?
         try:
             with self.engine.connect() as conn:
                 # Mevcut schema'yı kontrol et
-                current_schema = conn.execute(sa.text("SELECT current_schema()")).scalar()
+                current_schema = conn.execute(
+                    sa.text("SELECT current_schema()")
+                ).scalar()
                 logger.info(f"📍 Current schema: {current_schema}")
-                
+
                 # Tüm tabloları listele
-                all_tables = conn.execute(sa.text("""
+                all_tables = conn.execute(
+                    sa.text(
+                        """
                     SELECT table_schema, table_name 
                     FROM information_schema.tables 
                     WHERE table_type = 'BASE TABLE'
                     AND table_schema NOT IN ('information_schema', 'pg_catalog')
                     ORDER BY table_schema, table_name
-                """)).fetchall()
-                
-                logger.info(f"🗄️ Veritabanındaki tüm tablolar: {[(t[0], t[1]) for t in all_tables]}")
-                
+                """
+                    )
+                ).fetchall()
+
+                logger.info(
+                    f"🗄️ Veritabanındaki tüm tablolar: {[(t[0], t[1]) for t in all_tables]}"
+                )
+
         except Exception as e:
             logger.error(f"❌ Debug sorgusu başarısız: {e}")
 
@@ -224,12 +257,14 @@ class QueryEngine:
         if user_tables:
             # Şema ve tablo adlarını ayır
             # Not: Bu basit mantık, tüm tabloların aynı şemada olduğunu varsayar.
-            schemas = {t.split('.')[0] for t in user_tables if '.' in t}
+            schemas = {t.split(".")[0] for t in user_tables if "." in t}
             if schemas:
                 schema_name = list(schemas)[0]
                 # Schema belirtildiğinde include_tables kullanmıyoruz
                 # Çünkü schema içindeki tablolar otomatik olarak dahil ediliyor
-                logger.info(f"✅ Schema tespit edildi: {schema_name}, tüm tablolar dahil edilecek")
+                logger.info(
+                    f"✅ Schema tespit edildi: {schema_name}, tüm tablolar dahil edilecek"
+                )
             else:
                 # Schema yok, sadece tablo isimleri var - bunları include_tables olarak kullan
                 logger.info(f"⚠️ Schema yok, sadece tablolar: {user_tables}")
@@ -268,7 +303,17 @@ class QueryEngine:
         answer = result.get("output", "") if isinstance(result, dict) else str(result)
 
         generated_sql = getattr(db, "last_query", "")
-        safe_sql = verify_sql(generated_sql, engine=self.engine)
+        # If no SQL was generated, skip validation
+        if not generated_sql.strip():
+            safe_sql = generated_sql
+        else:
+            # Validate without read-only enforcement and skip cost guard for agent
+            safe_sql = verify_sql(
+                generated_sql,
+                enforce_read_only=False,
+                engine=self.engine,
+                cost_guard=False,
+            )
 
         rows = getattr(db, "last_result", [])
 

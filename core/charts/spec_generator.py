@@ -35,6 +35,7 @@ import numpy as np
 # İsteğe bağlı LLM
 try:
     from langchain_openai import ChatOpenAI
+
     _OPENAI_READY = bool(os.getenv("OPENAI_API_KEY"))
 except ModuleNotFoundError:  # langchain kurulu değilse
     ChatOpenAI = None  # type: ignore
@@ -105,20 +106,24 @@ def _infer_field_types(rows: List[Dict[str, Any]]) -> Dict[str, str]:
     """
     if not rows:
         return {}
-    
+
     sample = rows[0]
     types: Dict[str, str] = {}
     for col, val in sample.items():
         # Check if field has non-null values across multiple rows
-        non_null_values = [row.get(col) for row in rows[:min(10, len(rows))] if row.get(col) is not None]
-        
+        non_null_values = [
+            row.get(col)
+            for row in rows[: min(10, len(rows))]
+            if row.get(col) is not None
+        ]
+
         if not non_null_values:
             types[col] = "nominal"  # Default for empty/null fields
             continue
-            
+
         # Use first non-null value for type inference
         sample_val = non_null_values[0]
-        
+
         if _looks_temporal(col, sample_val):
             types[col] = "temporal"
         elif _is_numeric(sample_val):
@@ -128,7 +133,9 @@ def _infer_field_types(rows: List[Dict[str, Any]]) -> Dict[str, str]:
     return types
 
 
-def _choose_chart(field_types: Dict[str, str], rows: List[Dict[str, Any]]) -> Tuple[str, Dict[str, Any]]:
+def _choose_chart(
+    field_types: Dict[str, str], rows: List[Dict[str, Any]]
+) -> Tuple[str, Dict[str, Any]]:
     """
     Basit kurallara göre chart tipi & encoding seç.
     Returns
@@ -163,7 +170,11 @@ def _choose_chart(field_types: Dict[str, str], rows: List[Dict[str, Any]]) -> Tu
 def _rank_numeric_fields(rows: List[Dict[str, Any]], fields: List[str]) -> List[str]:
     variances = {}
     for f in fields:
-        vals = [row[f] for row in rows if row.get(f) is not None and isinstance(row.get(f), (int, float))]
+        vals = [
+            row[f]
+            for row in rows
+            if row.get(f) is not None and isinstance(row.get(f), (int, float))
+        ]
         if len(vals) > 1:
             variances[f] = float(np.var(vals))
         else:
@@ -192,32 +203,41 @@ def _rank_temporal_fields(rows: List[Dict[str, Any]], fields: List[str]) -> List
             except Exception:
                 pass
         if len(vals) > 1:
-            ranges[f] = float((max(vals) - min(vals)).astype('timedelta64[s]') / np.timedelta64(1, 's'))
+            ranges[f] = float(
+                (max(vals) - min(vals)).astype("timedelta64[s]")
+                / np.timedelta64(1, "s")
+            )
         else:
             ranges[f] = 0.0
     return sorted(fields, key=lambda x: ranges[x], reverse=True)
 
 
-def _build_spec(chart: str, enc: Dict[str, Any], title: str, sql: str, data: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _build_spec(
+    chart: str, enc: Dict[str, Any], title: str, sql: str, data: List[Dict[str, Any]]
+) -> Dict[str, Any]:
     """Vega-Lite spec üret."""
     if chart == "table":
         # Create a proper table visualization using concatenated text marks
         columns = enc["columns"][:5]  # Limit to first 5 columns to avoid clutter
-        
+
         return {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
             "description": title,
             "data": {"values": data},
-            "mark": {
-                "type": "rect",
-                "stroke": "#ccc",
-                "strokeWidth": 1
-            },
+            "mark": {"type": "rect", "stroke": "#ccc", "strokeWidth": 1},
             "encoding": {
-                "x": {"field": columns[0], "type": "nominal", "axis": {"title": columns[0]}},
-                "y": {"field": columns[1] if len(columns) > 1 else columns[0], "type": "nominal", "axis": {"title": columns[1] if len(columns) > 1 else columns[0]}},
+                "x": {
+                    "field": columns[0],
+                    "type": "nominal",
+                    "axis": {"title": columns[0]},
+                },
+                "y": {
+                    "field": columns[1] if len(columns) > 1 else columns[0],
+                    "type": "nominal",
+                    "axis": {"title": columns[1] if len(columns) > 1 else columns[0]},
+                },
                 "color": {"value": "#f0f0f0"},
-                "tooltip": [{"field": col, "type": "nominal"} for col in columns]
+                "tooltip": [{"field": col, "type": "nominal"} for col in columns],
             },
             "title": title,
             "usermeta": {"sql": sql},
@@ -289,7 +309,9 @@ def _is_numeric(val: Any) -> bool:
 
 def _vl_type(field: str, chart: str) -> str:
     """Vega-Lite tip kestirimi (temporal veya nominal)."""
-    return "temporal" if re.search(r"(date|time|year|month)", field, re.I) else "nominal"
+    return (
+        "temporal" if re.search(r"(date|time|year|month)", field, re.I) else "nominal"
+    )
 
 
 def _empty_spec(msg: str, title: str) -> Dict[str, Any]:

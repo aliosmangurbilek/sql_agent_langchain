@@ -18,10 +18,8 @@ flask_app.config
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict
 
 from dotenv import load_dotenv
 from pydantic import Field
@@ -35,6 +33,7 @@ ROOT_DIR = Path(__file__).resolve().parent
 
 class AppConfig(BaseSettings):
     """Application configuration using Pydantic v2"""
+
     # ---------------------------------------------------------- #
     # Flask / genel
     # ---------------------------------------------------------- #
@@ -50,7 +49,9 @@ class AppConfig(BaseSettings):
     # OpenRouter
     # ---------------------------------------------------------- #
     OPENROUTER_API_KEY: str = Field("", env="OPENROUTER_API_KEY")
-    OPENROUTER_MODEL: str = Field("openrouter/deepseek-chat-v3-0324:free", env="OPENROUTER_MODEL")
+    OPENROUTER_MODEL: str = Field(
+        "openrouter/deepseek-chat-v3-0324:free", env="OPENROUTER_MODEL"
+    )
 
     # ---------------------------------------------------------- #
     # LangChain Configuration
@@ -63,21 +64,19 @@ class AppConfig(BaseSettings):
     # ---------------------------------------------------------- #
     DEFAULT_DB_URI: str = Field(
         "postgresql://postgres:2336@localhost:5432/happiness_index",
-        env="DEFAULT_DB_URI"
+        env="DEFAULT_DB_URI",
     )
-    
+
     # Base database URL for multi-database schema worker
     BASE_DATABASE_URL: str = Field(
-        "postgresql+asyncpg://postgres:2336@localhost:5432/",
-        env="BASE_DATABASE_URL"
+        "postgresql+asyncpg://postgres:2336@localhost:5432/", env="BASE_DATABASE_URL"
     )
 
     # ---------------------------------------------------------- #
     # Vector storage
     # ---------------------------------------------------------- #
     VECTOR_STORE_PATH: str = Field(
-        str(ROOT_DIR / "storage" / "vectors"),
-        env="VECTOR_STORE_PATH"
+        str(ROOT_DIR / "storage" / "vectors"), env="VECTOR_STORE_PATH"
     )
 
     # ---------------------------------------------------------- #

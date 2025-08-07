@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Introspector
 
 Tek bir sorgu ile PostgreSQL veritabanındaki *tüm* kullanici şemalarini gezerek
@@ -31,6 +32,7 @@ from sqlalchemy import Engine, text
 # -----------------------------------------------------------------------------
 # Ana fonksiyon
 # -----------------------------------------------------------------------------
+
 
 def get_metadata(engine: Engine) -> List[Dict[str, Any]]:
     """Veritabanı şema metadatasını geri döndür."""
@@ -103,18 +105,20 @@ def get_metadata(engine: Engine) -> List[Dict[str, Any]]:
 
     result: List[Dict[str, Any]] = []
     for row in rows:
-        result.append({
-            "schema":          row["schema"],
-            "table":           row["table"],
-            "column":          row["column"],
-            "data_type":       row["data_type"],
-            "is_nullable":     bool(row["is_nullable"]),
-            "is_primary_key":  bool(row["is_primary_key"]),
-            "fk_refs":         row["fk_refs"].split(",") if row["fk_refs"] else [],
-            "row_estimate":    int(row["row_estimate"]),
-            "table_size_mb":   _to_float(row["table_size_mb"]),
-            "table_comment":   row["table_comment"],
-            "column_comment":  row["column_comment"],
-        })
+        result.append(
+            {
+                "schema": row["schema"],
+                "table": row["table"],
+                "column": row["column"],
+                "data_type": row["data_type"],
+                "is_nullable": bool(row["is_nullable"]),
+                "is_primary_key": bool(row["is_primary_key"]),
+                "fk_refs": row["fk_refs"].split(",") if row["fk_refs"] else [],
+                "row_estimate": int(row["row_estimate"]),
+                "table_size_mb": _to_float(row["table_size_mb"]),
+                "table_comment": row["table_comment"],
+                "column_comment": row["column_comment"],
+            }
+        )
 
     return result
