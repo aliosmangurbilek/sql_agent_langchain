@@ -143,11 +143,13 @@
                         <div class="schema-log-controls">
                             <button id="clear-schema-log" class="btn btn-secondary btn-sm">Clear Log</button>
                             <button id="toggle-schema-monitoring" class="btn btn-primary btn-sm" data-monitoring="false">Start Monitoring</button>
+                            <button id="refresh-embeddings" class="btn btn-success btn-sm">🔄 Refresh Embeddings</button>
+                            <button id="add-current-db-listener" class="btn btn-info btn-sm">📡 Monitor Current DB</button>
                         </div>
                         <div id="schema-log-container" class="schema-log">
                             <div class="log-entry info">
                                 <span class="timestamp">Ready</span>
-                                <span class="message">Schema change monitoring ready. Click "Start Monitoring" to begin.</span>
+                                <span class="message">Schema change monitoring ready. Use "🔄 Refresh Embeddings" to manually refresh after data changes, or "Start Monitoring" for real-time DDL changes.</span>
                             </div>
                         </div>
                     </div>
