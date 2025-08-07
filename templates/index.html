@@ -18,6 +18,13 @@
         </header>
 
         <main>
+            <!-- Schema Change Notifications -->
+            <section id="notification-section" class="notification-section" style="display: none;">
+                <div id="notification-container" class="notification-container">
+                    <!-- Notifications will be added here dynamically -->
+                </div>
+            </section>
+
             <!-- Worker Status Panel -->
             <section class="worker-status-section">
                 <h2>🔧 Schema Worker Status</h2>
@@ -69,6 +76,18 @@
                         <div class="input-row">
                             <input type="text" id="database-switcher" placeholder="database_name" value="">
                             <button id="switch-db-btn" class="btn btn-primary">Switch DB</button>
+                        </div>
+                    </div>
+
+                    <div class="input-group">
+                        <label>Manual Embedding Refresh:</label>
+                        <div class="embedding-controls">
+                            <div class="input-row">
+                                <input type="text" id="refresh-schema" placeholder="schema_name (optional)" value="">
+                                <input type="text" id="refresh-table" placeholder="table_name (optional)" value="">
+                                <button id="refresh-embeddings-btn" class="btn btn-warning">🔄 Refresh Embeddings</button>
+                            </div>
+                            <small class="help-text">Leave fields empty to refresh all embeddings for the active database</small>
                         </div>
                     </div>
                 </div>
@@ -187,6 +206,7 @@
 
     <!-- Application JavaScript modules -->
     <script src="{{ url_for('static', filename='js/ui-utils.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/notification-manager.js') }}"></script>
     <script src="{{ url_for('static', filename='js/worker-manager.js') }}"></script>
     <script src="{{ url_for('static', filename='js/schema-logger.js') }}"></script>
     <script src="{{ url_for('static', filename='js/model-manager.js') }}"></script>

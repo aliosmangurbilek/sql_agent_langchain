@@ -908,3 +908,145 @@ body.dark-mode .log-entry {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
 }
+
+/* Schema Change Notification Styles */
+.notification-section {
+    margin-bottom: 20px;
+}
+
+.notification-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.notification-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 15px;
+    border-radius: 8px;
+    border-left: 4px solid;
+    background: var(--section-bg);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    animation: slideIn 0.3s ease-out;
+}
+
+.notification-item.warning {
+    border-left-color: #ff9800;
+    background: #fff3e0;
+}
+
+.notification-item.success {
+    border-left-color: #4caf50;
+    background: #e8f5e8;
+}
+
+.notification-item.info {
+    border-left-color: #2196f3;
+    background: #e3f2fd;
+}
+
+.notification-item.error {
+    border-left-color: #f44336;
+    background: #ffebee;
+}
+
+body.dark-mode .notification-item.warning {
+    background: #4a3319;
+}
+
+body.dark-mode .notification-item.success {
+    background: #1b3d1b;
+}
+
+body.dark-mode .notification-item.info {
+    background: #1a2f4a;
+}
+
+body.dark-mode .notification-item.error {
+    background: #4a1a1a;
+}
+
+.notification-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.notification-title {
+    font-weight: 600;
+    font-size: 0.95em;
+}
+
+.notification-message {
+    font-size: 0.9em;
+    opacity: 0.8;
+}
+
+.notification-details {
+    font-size: 0.8em;
+    opacity: 0.6;
+    font-family: monospace;
+}
+
+.notification-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.notification-btn {
+    padding: 6px 12px;
+    border: none;
+    border-radius: 4px;
+    font-size: 0.8em;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.notification-btn.refresh {
+    background: #ff9800;
+    color: white;
+}
+
+.notification-btn.refresh:hover {
+    background: #f57c00;
+}
+
+.notification-btn.dismiss {
+    background: #666;
+    color: white;
+}
+
+.notification-btn.dismiss:hover {
+    background: #555;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateX(-100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+/* Embedding controls styling */
+.embedding-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.help-text {
+    color: #666;
+    font-style: italic;
+}
+
+body.dark-mode .help-text {
+    color: #999;
+}

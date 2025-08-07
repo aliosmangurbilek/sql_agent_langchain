@@ -6,6 +6,7 @@ let workerManager;
 let schemaLogger;
 let modelManager;
 let configManager;
+let notificationManager;
 
 // Global state for caching query results (optimization)
 let lastQueryResult = null;
@@ -42,6 +43,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     schemaLogger = new SchemaLogger();
     modelManager = new ModelManager();
     configManager = new ConfigManager();
+    notificationManager = new NotificationManager();
     
     // Load saved configuration and defaults
     configManager.loadSavedConfiguration();
@@ -104,6 +106,7 @@ function setupEventListeners() {
     const saveBaseUriBtn = document.getElementById('save-base-uri-btn');
     const switchDbBtn = document.getElementById('switch-db-btn');
     const refreshStatusBtn = document.getElementById('refresh-status-btn');
+    const refreshEmbeddingsBtn = document.getElementById('refresh-embeddings-btn');
     const databaseSwitcher = document.getElementById('database-switcher');
 
     if (saveBaseUriBtn) {
@@ -114,6 +117,9 @@ function setupEventListeners() {
     }
     if (refreshStatusBtn) {
         refreshStatusBtn.addEventListener('click', () => workerManager.checkWorkerStatus());
+    }
+    if (refreshEmbeddingsBtn) {
+        refreshEmbeddingsBtn.addEventListener('click', handleManualEmbeddingRefresh);
     }
 
     // Enter key handling
@@ -493,6 +499,44 @@ function resetProgress() {
     updateProgress(0, 'Initializing...', []);
 }
 
+// Manual embedding refresh handler
+async function handleManualEmbeddingRefresh() {
+    const refreshBtn = document.getElementById('refresh-embeddings-btn');
+    const schemaInput = document.getElementById('refresh-schema');
+    const tableInput = document.getElementById('refresh-table');
+    
+    if (!refreshBtn) return;
+    
+    const originalText = refreshBtn.innerHTML;
+    
+    try {
+        refreshBtn.disabled = true;
+        refreshBtn.innerHTML = '⏳ Refreshing...';
+        
+        const schema = schemaInput?.value.trim() || null;
+        const table = tableInput?.value.trim() || null;
+        
+        // Use notification manager to handle the refresh
+        await notificationManager.refreshAllEmbeddings(null, schema, table);
+        
+        // Clear input fields on success
+        if (schemaInput) schemaInput.value = '';
+        if (tableInput) tableInput.value = '';
+        
+    } catch (error) {
+        console.error('Manual refresh error:', error);
+        notificationManager.showNotification({
+            type: 'error',
+            title: '❌ Manual Refresh Failed',
+            message: error.message,
+            duration: 5000
+        });
+    } finally {
+        refreshBtn.disabled = false;
+        refreshBtn.innerHTML = originalText;
+    }
+}
+
 async function loadSampleQuestions() {
     // This can be enhanced to load from an API endpoint
     const sampleQuestions = [
@@ -511,12 +555,46 @@ async function loadSampleQuestions() {
     }
 }
 
+async function handleManualEmbeddingRefresh() {
+    const refreshSchemaInput = document.getElementById('refresh-schema');
+    const refreshTableInput = document.getElementById('refresh-table');
+    const refreshBtn = document.getElementById('refresh-embeddings-btn');
+    
+    if (!refreshBtn) return;
+    
+    const schema = refreshSchemaInput?.value.trim() || null;
+    const table = refreshTableInput?.value.trim() || null;
+    
+    // Set button loading state
+    const originalText = refreshBtn.textContent;
+    refreshBtn.disabled = true;
+    refreshBtn.innerHTML = '<span class="btn-spinner">⏳</span> Refreshing...';
+    
+    try {
+        // Use notification manager for the refresh
+        await notificationManager.refreshAllEmbeddings(null, schema, table);
+        
+        // Clear inputs after successful refresh
+        if (refreshSchemaInput) refreshSchemaInput.value = '';
+        if (refreshTableInput) refreshTableInput.value = '';
+        
+    } catch (error) {
+        console.error('Manual embedding refresh error:', error);
+        UIUtils.showError(`Manual refresh failed: ${error.message}`);
+    } finally {
+        // Reset button
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = originalText;
+    }
+}
+
 // Export functions for debugging and testing
 window.AppDebug = {
     workerManager: () => workerManager,
     schemaLogger: () => schemaLogger,
     modelManager: () => modelManager,
     configManager: () => configManager,
+    notificationManager: () => notificationManager,
     executeQuery,
     loadSampleQuestions
 };

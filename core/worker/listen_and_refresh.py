@@ -425,7 +425,7 @@ async def remove_table_embeddings(engine: AsyncEngine, schema: str, table: str) 
 
 
 async def handle_notification(payload: str) -> None:
-    """Handle schema change notification."""
+    """Handle schema change notification - NOTIFICATION ONLY MODE."""
     try:
         data = json.loads(payload)
         db_name = data["db"]
@@ -435,8 +435,68 @@ async def handle_notification(payload: str) -> None:
 
         logger.info(f"🔄 Schema changed: {db_name}.{schema}.{table} ({command})")
         
-        # Broadcast to SSE clients
-        event_data = {
+        # Check if this affects existing embeddings
+        needs_refresh = False
+        affected_tables = []
+        
+        try:
+            # Get database handles to check if embeddings exist
+            engine, _ = await get_handles(db_name)
+            
+            if command == "DROP TABLE":
+                # Check if embeddings exist for this table
+                async with engine.connect() as conn:
+                    result = await conn.execute(
+                        text('SELECT COUNT(*) as count FROM schema_embeddings WHERE schema=:s AND "table"=:t'),
+                        {"s": schema, "t": table}
+                    )
+                    count = result.scalar()
+                    if count > 0:
+                        # Auto-remove embeddings for dropped tables
+                        await remove_table_embeddings(engine, schema, table)
+                        logger.info(f"🗑️ Auto-removed embeddings for dropped table {schema}.{table}")
+                        
+                        # Broadcast drop event
+                        drop_event = {
+                            "type": "table_dropped",
+                            "timestamp": time.time(),
+                            "database": db_name,
+                            "schema": schema,
+                            "table": table,
+                            "message": f"Table '{schema}.{table}' was dropped - embeddings automatically removed",
+                            "action_required": False
+                        }
+                        broadcast_to_sse_clients(drop_event)
+            else:
+                # For other changes, mark as needing refresh
+                needs_refresh = True
+                affected_tables = [f"{schema}.{table}"]
+                
+        except Exception as e:
+            logger.warning(f"Could not check embedding status: {e}")
+            needs_refresh = True
+            affected_tables = [f"{schema}.{table}"]
+        
+        # Send notification to users about schema changes
+        if needs_refresh:
+            notification_event = {
+                "type": "schema_change_notification",
+                "timestamp": time.time(),
+                "database": db_name,
+                "schema": schema,
+                "table": table,
+                "command": command,
+                "affected_tables": affected_tables,
+                "message": f"⚠️ Schema changed in '{db_name}.{schema}.{table}' ({command}). Please refresh embeddings before running queries.",
+                "action_required": True,
+                "suggested_action": "refresh_embeddings",
+                "severity": "warning"
+            }
+            broadcast_to_sse_clients(notification_event)
+            logger.info(f"📢 Sent refresh notification for {schema}.{table} to clients")
+        
+        # Always broadcast the base schema change event for logging
+        base_event = {
             "type": "schema_change",
             "timestamp": time.time(),
             "database": db_name,
@@ -445,56 +505,7 @@ async def handle_notification(payload: str) -> None:
             "command": command,
             "message": f"Schema changed: {db_name}.{schema}.{table} ({command})"
         }
-        broadcast_to_sse_clients(event_data)
-
-        # Get database handles
-        engine, _ = await get_handles(db_name)
-
-        # Get metadata for the affected table using async wrapper
-        all_metadata = await get_metadata_async(engine)
-        rows = [
-            r
-            for r in all_metadata
-            if r["schema"] == schema and r["table"] == table
-        ]
-
-        if command == "DROP TABLE" or not rows:
-            await remove_table_embeddings(engine, schema, table)
-            logger.info(f"🗑️ Removed embeddings for {schema}.{table}")
-            
-            # Broadcast drop event to SSE clients
-            drop_event = {
-                "type": "table_drop",
-                "timestamp": time.time(),
-                "database": db_name,
-                "schema": schema,
-                "table": table,
-                "message": f"Table dropped: {db_name}.{schema}.{table} - embeddings removed"
-            }
-            broadcast_to_sse_clients(drop_event)
-        else:
-            # Generate embeddings for table metadata
-            texts = [
-                f"passage: {r['schema']}.{r['table']}({r['column']} {r['data_type']})"
-                for r in rows
-            ]
-            vectors = embedding_model.embed_documents(texts)
-            await refresh_embeddings(engine, schema, table, vectors)
-            logger.info(
-                f"✅ Refreshed embeddings for {schema}.{table} ({len(vectors)} vectors)"
-            )
-            
-            # Broadcast refresh event to SSE clients
-            refresh_event = {
-                "type": "embedding_refresh",
-                "timestamp": time.time(),
-                "database": db_name,
-                "schema": schema,
-                "table": table,
-                "vectors_count": len(vectors),
-                "message": f"Embeddings refreshed: {schema}.{table} ({len(vectors)} vectors)"
-            }
-            broadcast_to_sse_clients(refresh_event)
+        broadcast_to_sse_clients(base_event)
 
     except Exception as e:
         logger.error(f"❌ Error handling notification: {e}", exc_info=True)
