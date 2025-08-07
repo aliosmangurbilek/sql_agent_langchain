@@ -91,31 +91,21 @@ def set_active_database():
 
 @bp.route("/schema_events", methods=["GET"])
 def schema_events_stream():
-    """
-    Server-Sent Events endpoint for real-time schema change notifications.
-    This would typically connect to the worker's notification system.
-    """
-
-    def generate_events():
-        # This is a placeholder for real SSE implementation
-        # In a real implementation, you'd connect to the worker's event stream
-        yield 'data: {"type": "connected", "message": "Schema monitoring connected"}\n\n'
-
-        # You could implement a Redis pub/sub or direct connection to worker here
-        import time
-        import json
-
-        while True:
-            # Simulate events for demo - replace with real event source
-            time.sleep(10)
-            event_data = {
-                "type": "heartbeat",
-                "timestamp": time.time(),
-                "message": "Schema worker is running",
-            }
-            yield f"data: {json.dumps(event_data)}\n\n"
+    """Proxy SSE stream from the worker to frontend clients."""
 
     from flask import Response
+
+    def generate_events():
+        try:
+            with requests.get(
+                f"{WORKER_BASE_URL}/events", stream=True, timeout=(5, None)
+            ) as r:
+                for chunk in r.iter_content(chunk_size=1024, decode_unicode=True):
+                    if chunk:
+                        yield chunk
+        except requests.RequestException as e:
+            logger.error(f"SSE proxy error: {e}")
+            yield f"data: {{\"type\": \"error\", \"message\": \"{str(e)}\"}}\n\n"
 
     return Response(
         generate_events(),

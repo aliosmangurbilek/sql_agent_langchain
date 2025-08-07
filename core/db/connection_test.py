@@ -5,10 +5,12 @@ Database connection testing utilities
 import logging
 import sqlalchemy as sa
 from sqlalchemy.exc import SQLAlchemyError
+import pytest
 
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.skip("utility test requires db_uri fixture")
 def test_database_connection(db_uri: str) -> dict:
     """
     Test database connection without importing heavy ML libraries.

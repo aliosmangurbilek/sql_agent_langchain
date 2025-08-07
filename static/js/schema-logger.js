@@ -66,9 +66,9 @@ class SchemaLogger {
         
         this.addSchemaLogEntry('info', 'Schema monitoring started');
         
-        // Start monitoring
+        // Start monitoring via SSE
         this.schemaMonitoring = true;
-        this.simulateSchemaMonitoring();
+        this.connectEventSource();
     }
 
     stopSchemaMonitoring() {
@@ -81,30 +81,33 @@ class SchemaLogger {
             this.schemaEventSource.close();
             this.schemaEventSource = null;
         }
-        
+
         this.addSchemaLogEntry('info', 'Schema monitoring stopped');
     }
 
-    simulateSchemaMonitoring() {
-        // This is a simulation - in real implementation, you'd connect to actual schema change events
-        // For demonstration purposes only
+    connectEventSource() {
         if (!this.schemaMonitoring) return;
-        
-        // Simulate random schema events for demo
-        setTimeout(() => {
-            if (this.schemaMonitoring && Math.random() > 0.7) {
-                const actions = [
-                    { type: 'schema-change', message: '🔄 Table "users" created in schema "public"' },
-                    { type: 'embedding-refresh', message: '✅ Embeddings refreshed for "public.users" (5 vectors)' },
-                    { type: 'table-drop', message: '🗑️ Table "temp_data" dropped from schema "public"' }
-                ];
-                
-                const action = actions[Math.floor(Math.random() * actions.length)];
-                this.addSchemaLogEntry('info', action.message, action.type);
+
+        this.schemaEventSource = new EventSource('/api/worker/schema_events');
+
+        this.schemaEventSource.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                const extra = data.command ? data.command.toLowerCase().replace(' ', '-') : data.type || '';
+                const message = data.message || `${data.command}: ${data.schema}.${data.table}`;
+                this.addSchemaLogEntry('info', message, extra);
+            } catch (err) {
+                this.addSchemaLogEntry('error', `Invalid event data: ${event.data}`);
             }
-            
-            this.simulateSchemaMonitoring();
-        }, 5000 + Math.random() * 10000); // Random interval between 5-15 seconds
+        };
+
+        this.schemaEventSource.onerror = () => {
+            this.addSchemaLogEntry('error', 'Connection lost. Reconnecting...');
+            this.schemaEventSource.close();
+            if (this.schemaMonitoring) {
+                setTimeout(() => this.connectEventSource(), 3000);
+            }
+        };
     }
 
     // Method to be called from external modules

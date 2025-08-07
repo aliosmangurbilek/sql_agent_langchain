@@ -21,7 +21,8 @@ from typing import Dict, List, Tuple
 
 import asyncpg
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
 from langchain_huggingface import HuggingFaceEmbeddings
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -41,6 +42,7 @@ logger = logging.getLogger(__name__)
 ACTIVE_DB = "default"
 connection_cache: Dict[str, Tuple[AsyncEngine, asyncpg.Connection]] = {}
 shutdown_event = asyncio.Event()
+sse_clients: List[asyncio.Queue[str]] = []
 
 # Initialize embedding model
 embedding_model = HuggingFaceEmbeddings(
@@ -74,6 +76,28 @@ async def get_status():
         "active_db": ACTIVE_DB,
         "cached_connections": list(connection_cache.keys()),
     }
+
+
+@app.get("/events")
+async def stream_events(request: Request):
+    """SSE endpoint providing schema change notifications."""
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    sse_clients.append(queue)
+
+    async def event_generator():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                data = await queue.get()
+                yield f"data: {data}\n\n"
+        finally:
+            if queue in sse_clients:
+                sse_clients.remove(queue)
+
+    return StreamingResponse(
+        event_generator(), media_type="text/event-stream"
+    )
 
 
 async def get_handles(db_name: str) -> Tuple[AsyncEngine, asyncpg.Connection]:
@@ -221,6 +245,12 @@ async def schema_listener() -> None:
                 # Wait for notification with timeout to check shutdown event
                 payload = await asyncio.wait_for(queue.get(), timeout=1.0)
                 await handle_notification(payload)
+                # Broadcast raw payload to SSE clients
+                for client in list(sse_clients):
+                    try:
+                        client.put_nowait(payload)
+                    except Exception:
+                        pass
             except asyncio.TimeoutError:
                 continue  # Check shutdown event
             except Exception as e:

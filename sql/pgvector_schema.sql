@@ -43,3 +43,31 @@ DROP EVENT TRIGGER IF EXISTS trg_schema_change;
 CREATE EVENT TRIGGER trg_schema_change
     ON ddl_command_end
     EXECUTE FUNCTION ddl_notify_schema_change();
+
+-- Additional trigger to detect table drops via sql_drop events
+CREATE OR REPLACE FUNCTION ddl_notify_table_drop()
+RETURNS event_trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    obj RECORD;
+    payload JSON;
+BEGIN
+    FOR obj IN SELECT * FROM pg_event_trigger_dropped_objects() LOOP
+        IF obj.object_type = 'table' THEN
+            payload := json_build_object(
+                'db', current_database(),
+                'schema', obj.schema_name,
+                'table', obj.object_name,
+                'command', 'DROP TABLE'
+            );
+            PERFORM pg_notify('schema_changed', payload::text);
+        END IF;
+    END LOOP;
+END;
+$$;
+
+DROP EVENT TRIGGER IF EXISTS trg_table_drop;
+CREATE EVENT TRIGGER trg_table_drop
+    ON sql_drop
+    EXECUTE FUNCTION ddl_notify_table_drop();
