@@ -22,17 +22,35 @@ AS $$
 DECLARE
     cmd RECORD;
     payload JSON;
+    obj_name TEXT;
+    sch_name TEXT;
 BEGIN
     FOR cmd IN SELECT * FROM pg_event_trigger_ddl_commands()
     LOOP
+        -- Skip schema_embeddings table to avoid circular triggers
         IF cmd.command_tag IN ('CREATE TABLE', 'ALTER TABLE', 'DROP TABLE') THEN
-            payload := json_build_object(
-                'db', current_database(),
-                'schema', cmd.schema_name,
-                'table', cmd.object_name,
-                'command', cmd.command_tag
-            );
-            PERFORM pg_notify('schema_changed', payload::text);
+            BEGIN
+                -- Safely extract object name and schema name
+                obj_name := COALESCE(cmd.object_identity, cmd.objid::text, 'unknown');
+                sch_name := COALESCE(cmd.schema_name, 'public');
+                
+                -- Skip if this is the schema_embeddings table itself
+                IF obj_name LIKE '%schema_embeddings%' THEN
+                    CONTINUE;
+                END IF;
+                
+                payload := json_build_object(
+                    'db', current_database(),
+                    'schema', sch_name,
+                    'table', obj_name,
+                    'command', cmd.command_tag
+                );
+                PERFORM pg_notify('schema_changed', payload::text);
+                
+            EXCEPTION WHEN OTHERS THEN
+                -- If anything fails, just skip this notification
+                CONTINUE;
+            END;
         END IF;
     END LOOP;
 END;

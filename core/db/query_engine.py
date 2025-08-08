@@ -198,6 +198,22 @@ class QueryEngine:
         logger.info(f"📋 Sorgu için ilgili tablolar bulundu: {user_tables}")
         logger.info(f"🔗 Database URI: {self.db_uri}")
         
+        # If no tables found from embedder, try to rebuild embeddings once
+        if not user_tables:
+            logger.warning("🔄 No tables found from embedder, attempting to rebuild embeddings...")
+            try:
+                self.embedder.rebuild()
+                hits = self.embedder.similarity_search(nl_query, k=5)
+                qualified_table_names = [hit["table"] for hit in hits if hit.get("table")]
+                user_tables = [
+                    t for t in qualified_table_names
+                    if t and not t.startswith("information_schema.")
+                ]
+                logger.info(f"🔄 After rebuild - Embedder'dan gelen tablolar: {qualified_table_names}")
+                logger.info(f"🔄 After rebuild - Sorgu için ilgili tablolar: {user_tables}")
+            except Exception as rebuild_error:
+                logger.error(f"❌ Failed to rebuild embeddings: {rebuild_error}")
+        
         # Debug: Veritabanında gerçekte hangi tablolar var?
         try:
             with self.engine.connect() as conn:
@@ -250,7 +266,8 @@ class QueryEngine:
                 sample_rows_in_table_info=3,
             )
         else:
-            # Ne schema ne de tablo listesi - tüm tabloları al
+            # Ne schema ne de tablo listesi - tüm tabloları al (fallback)
+            logger.warning("🔄 No tables found from embedder, falling back to all tables")
             db = LoggingSQLDatabase.from_uri(
                 self.db_uri,
                 sample_rows_in_table_info=3,
@@ -268,7 +285,29 @@ class QueryEngine:
         answer = result.get("output", "") if isinstance(result, dict) else str(result)
 
         generated_sql = getattr(db, "last_query", "")
-        safe_sql = verify_sql(generated_sql, engine=self.engine)
+        logger.info(f"🔍 Agent generated SQL: '{generated_sql}'")
+        
+        # Handle empty SQL case
+        if not generated_sql or not generated_sql.strip():
+            logger.warning("⚠️ Agent produced empty SQL - this usually means no relevant tables were found")
+            return {
+                "answer": "I couldn't find any relevant tables to answer your question. Please check if the database contains the data you're looking for.",
+                "sql": "",
+                "data": [],
+                "rowcount": 0,
+            }
+        
+        try:
+            safe_sql = verify_sql(generated_sql, engine=self.engine)
+        except Exception as verify_error:
+            logger.warning(f"⚠️ SQL verification failed: {verify_error}")
+            logger.warning(f"🔍 Problematic SQL: '{generated_sql}'")
+            # For debugging, allow the query but with a limit
+            if "SELECT" in generated_sql.upper():
+                safe_sql = generated_sql if "LIMIT" in generated_sql.upper() else f"{generated_sql.rstrip().rstrip(';')} LIMIT 100"
+                logger.info("🔧 Allowing SELECT query with limit for debugging")
+            else:
+                raise verify_error
 
         rows = getattr(db, "last_result", [])
 

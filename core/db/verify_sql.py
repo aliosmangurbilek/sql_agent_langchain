@@ -86,7 +86,35 @@ def _check_read_only(raw_sql: str) -> None:
     if not (_SELECT_REGEX.search(raw_sql) or 
             sql_upper.startswith("WITH ") or 
             sql_upper.startswith("EXPLAIN")):
+        
+        # Check if it's a schema introspection query (these are safe)
+        if _is_schema_query(raw_sql):
+            return  # Allow schema queries
+            
         raise UnsafeSQLError("Query does not appear to be a read-only statement.")
+
+
+def _is_schema_query(raw_sql: str) -> bool:
+    """Check if the query is a safe schema introspection query."""
+    sql_upper = raw_sql.upper().strip()
+    
+    # Allow queries that select from system tables/views
+    schema_patterns = [
+        "INFORMATION_SCHEMA.",
+        "PG_CATALOG.",
+        "PG_CLASS",
+        "PG_ATTRIBUTE", 
+        "PG_NAMESPACE",
+        "PG_TYPE",
+        "PG_CONSTRAINT",
+        "PG_INDEX"
+    ]
+    
+    # Only allow if it contains SELECT and references schema tables
+    has_select = _SELECT_REGEX.search(raw_sql)
+    has_schema_ref = any(pattern in sql_upper for pattern in schema_patterns)
+    
+    return has_select and has_schema_ref
 
 
 def _maybe_append_limit(raw_sql: str, limit: int) -> str:

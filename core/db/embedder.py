@@ -77,21 +77,163 @@ class DBEmbedder:
             # Enable pgvector extension
             await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
             
-            # Create table
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS schema_embeddings (
-                    id BIGSERIAL PRIMARY KEY,
-                    schema TEXT NOT NULL,
-                    "table" TEXT NOT NULL,
-                    embedding VECTOR(1024)
+            # Check if table exists at all
+            table_exists = await conn.fetchval("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'schema_embeddings'
                 )
             """)
+            
+            if not table_exists:
+                # Table doesn't exist, create with new schema
+                logger.info("📋 Creating schema_embeddings table with multi-database support...")
+                
+                # Temporarily disable event triggers to avoid conflicts
+                try:
+                    await conn.execute("ALTER EVENT TRIGGER trg_schema_change DISABLE")
+                except:
+                    pass  # Trigger might not exist, that's fine
+                
+                await conn.execute("""
+                    CREATE TABLE schema_embeddings (
+                        id BIGSERIAL PRIMARY KEY,
+                        db_name TEXT NOT NULL,
+                        schema TEXT NOT NULL,
+                        "table" TEXT NOT NULL,
+                        embedding VECTOR(1024),
+                        UNIQUE(db_name, schema, "table")
+                    )
+                """)
+                
+                # Re-enable event triggers
+                try:
+                    await conn.execute("ALTER EVENT TRIGGER trg_schema_change ENABLE")
+                except:
+                    pass  # Trigger might not exist, that's fine
+                    
+                logger.info("✅ Table created successfully")
+            else:
+                # Table exists, check if it has db_name column
+                try:
+                    db_name_exists = await conn.fetchval("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM information_schema.columns 
+                            WHERE table_name = 'schema_embeddings' 
+                            AND column_name = 'db_name'
+                        )
+                    """)
+                    
+                    if not db_name_exists:
+                        logger.info("🔧 Migrating existing schema_embeddings table to support multiple databases...")
+                        
+                        # Temporarily disable event triggers to avoid conflicts
+                        try:
+                            await conn.execute("ALTER EVENT TRIGGER trg_schema_change DISABLE")
+                        except:
+                            pass  # Trigger might not exist, that's fine
+                        
+                        # Drop existing table and recreate to avoid conflicts
+                        await conn.execute("DROP TABLE schema_embeddings")
+                        
+                        # Recreate with new schema
+                        await conn.execute("""
+                            CREATE TABLE schema_embeddings (
+                                id BIGSERIAL PRIMARY KEY,
+                                db_name TEXT NOT NULL,
+                                schema TEXT NOT NULL,
+                                "table" TEXT NOT NULL,
+                                embedding VECTOR(1024),
+                                UNIQUE(db_name, schema, "table")
+                            )
+                        """)
+                        
+                        # Re-enable event triggers
+                        try:
+                            await conn.execute("ALTER EVENT TRIGGER trg_schema_change ENABLE")
+                        except:
+                            pass  # Trigger might not exist, that's fine
+                        
+                        logger.info("✅ Migration completed - table recreated with new schema")
+                    else:
+                        logger.info("✅ Table already has multi-database support")
+                        
+                except Exception as migration_error:
+                    logger.warning(f"Migration check failed, recreating table: {migration_error}")
+                    # If anything goes wrong, just recreate the table
+                    try:
+                        await conn.execute("ALTER EVENT TRIGGER trg_schema_change DISABLE")
+                    except:
+                        pass  # Trigger might not exist, that's fine
+                        
+                    await conn.execute("DROP TABLE IF EXISTS schema_embeddings")
+                    await conn.execute("""
+                        CREATE TABLE schema_embeddings (
+                            id BIGSERIAL PRIMARY KEY,
+                            db_name TEXT NOT NULL,
+                            schema TEXT NOT NULL,
+                            "table" TEXT NOT NULL,
+                            embedding VECTOR(1024),
+                            UNIQUE(db_name, schema, "table")
+                        )
+                    """)
+                    
+                    try:
+                        await conn.execute("ALTER EVENT TRIGGER trg_schema_change ENABLE")
+                    except:
+                        pass  # Trigger might not exist, that's fine
+                        
+                    logger.info("✅ Table recreated after migration error")
             
             # Create HNSW index
             await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_schema_embeddings_embedding
                     ON schema_embeddings USING hnsw (embedding vector_cosine_ops)
                     WITH (m = 32, ef_construction = 200)
+            """)
+            
+            # Update/create the DDL trigger function to be more robust
+            await conn.execute("""
+                CREATE OR REPLACE FUNCTION ddl_notify_schema_change()
+                RETURNS event_trigger
+                LANGUAGE plpgsql
+                AS $$
+                DECLARE
+                    cmd RECORD;
+                    payload JSON;
+                    obj_name TEXT;
+                    sch_name TEXT;
+                BEGIN
+                    FOR cmd IN SELECT * FROM pg_event_trigger_ddl_commands()
+                    LOOP
+                        -- Skip schema_embeddings table to avoid circular triggers
+                        IF cmd.command_tag IN ('CREATE TABLE', 'ALTER TABLE', 'DROP TABLE') THEN
+                            BEGIN
+                                -- Safely extract object name and schema name
+                                obj_name := COALESCE(cmd.object_identity, cmd.objid::text, 'unknown');
+                                sch_name := COALESCE(cmd.schema_name, 'public');
+                                
+                                -- Skip if this is the schema_embeddings table itself
+                                IF obj_name LIKE '%schema_embeddings%' THEN
+                                    CONTINUE;
+                                END IF;
+                                
+                                payload := json_build_object(
+                                    'db', current_database(),
+                                    'schema', sch_name,
+                                    'table', obj_name,
+                                    'command', cmd.command_tag
+                                );
+                                PERFORM pg_notify('schema_changed', payload::text);
+                                
+                            EXCEPTION WHEN OTHERS THEN
+                                -- If anything fails, just skip this notification
+                                CONTINUE;
+                            END;
+                        END IF;
+                    END LOOP;
+                END;
+                $$
             """)
             
         finally:
@@ -111,9 +253,9 @@ class DBEmbedder:
         await register_vector(conn)
 
         try:
-            # Check if we already have embeddings for this database
+            # Check if we already have embeddings for this specific database
             count = await conn.fetchval(
-                "SELECT COUNT(*) FROM schema_embeddings WHERE schema = $1",
+                "SELECT COUNT(*) FROM schema_embeddings WHERE db_name = $1",
                 self.db_name
             )
 
@@ -132,9 +274,9 @@ class DBEmbedder:
         logger.info(f"🔄 Building embeddings for database: {self.db_name}")
         
         if force:
-            # Clear existing embeddings for this database
+            # Clear existing embeddings for this specific database
             await conn.execute(
-                "DELETE FROM schema_embeddings WHERE schema = $1",
+                "DELETE FROM schema_embeddings WHERE db_name = $1",
                 self.db_name
             )
         
@@ -159,9 +301,10 @@ class DBEmbedder:
             # Store in pgvector using binary format
             await conn.execute(
                 """
-                INSERT INTO schema_embeddings (schema, "table", embedding)
-                VALUES ($1, $2, $3::vector)
+                INSERT INTO schema_embeddings (db_name, schema, "table", embedding)
+                VALUES ($1, $2, $3, $4::vector)
                 """,
+                self.db_name,
                 schema_name,
                 table_name,
                 Vector(embedding),
@@ -185,6 +328,18 @@ class DBEmbedder:
         await register_vector(conn)
 
         try:
+            # Debug: Check what's in the database
+            debug_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM schema_embeddings WHERE db_name = $1", 
+                self.db_name
+            )
+            debug_tables = await conn.fetch(
+                "SELECT DISTINCT schema, \"table\" FROM schema_embeddings WHERE db_name = $1", 
+                self.db_name
+            )
+            logger.info(f"🔍 Debug - Total embeddings for {self.db_name}: {debug_count}")
+            logger.info(f"🔍 Debug - Available tables for {self.db_name}: {[(r['schema'], r['table']) for r in debug_tables]}")
+            
             # Search using cosine similarity (1 - cosine_distance)
             results = await conn.fetch(
                 """
@@ -193,7 +348,7 @@ class DBEmbedder:
                     "table",
                     (1 - (embedding <=> $1::vector)) AS similarity_score
                 FROM schema_embeddings
-                WHERE schema = $2
+                WHERE db_name = $2
                 ORDER BY embedding <=> $1::vector
                 LIMIT $3
                 """,

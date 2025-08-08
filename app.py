@@ -135,7 +135,7 @@ if __name__ == "__main__":
     logging.info("🌐 Starting Flask application...")
     logging.info("   📊 Web Interface: http://localhost:5000")
     logging.info("   🛑 Press Ctrl+C to stop")
-    
+
     try:
         app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
     except KeyboardInterrupt:
