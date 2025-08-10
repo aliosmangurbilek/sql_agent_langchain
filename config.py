@@ -1,98 +1,63 @@
-"""
-flask_app.config
-~~~~~~~    # ---------------------------------------------------------- #
-    # Flask / genel
-    # ---------------------------------------------------------- #
-    FLASK_ENV: str = Field("development", env="FLASK_ENV")
-    FLASK_DEBUG: bool = Field(True, env="FLASK_DEBUG")
-
-    # ---------------------------------------------------------- #
-    # OpenRouter (Tek LLM Provider)
-    # ---------------------------------------------------------- #
-    OPENROUTER_API_KEY: str = Field("", env="OPENROUTER_API_KEY")
-    OPENROUTER_MODEL: str = Field("deepseek/deepseek-chat", env="OPENROUTER_MODEL")î yapılandırma katmanı.
-• .env (veya gerçek ortam değişkenleri) okunur
-• Pydantic BaseSettings → type-safe erişim
-• create_app() içinde   app.config.from_object(Settings())
-"""
-
 from __future__ import annotations
 
-import os
 from functools import lru_cache
-from pathlib import Path
-from typing import Any, Dict
+import os
 
-from dotenv import load_dotenv
-from pydantic import Field
-from pydantic_settings import BaseSettings
+# Try Pydantic v2 first, then v1; fall back to a no-deps shim
+try:
+    from pydantic_settings import BaseSettings
+    from pydantic import Field
+    _HAS_PYDANTIC = True
+except Exception:  # pragma: no cover - fallback if pydantic_settings missing
+    try:
+        from pydantic import BaseSettings, Field  # type: ignore
+        _HAS_PYDANTIC = True
+    except Exception:  # pragma: no cover
+        _HAS_PYDANTIC = False
 
-# .env dosyası varsa yükle
-load_dotenv()
+if _HAS_PYDANTIC:
+    class AppConfig(BaseSettings):
+        """Application configuration (env-driven)."""
+        # Flask
+        FLASK_ENV: str = Field(default="development", env="FLASK_ENV")
+        FLASK_DEBUG: bool = Field(default=True, env="FLASK_DEBUG")
+        SECRET_KEY: str = Field(default="dev", env="SECRET_KEY")
 
-ROOT_DIR = Path(__file__).resolve().parent
+        # Databases
+        BASE_DATABASE_URL: str = Field(default="", env="BASE_DATABASE_URL")  # e.g., postgresql+asyncpg://user:pw@host/db
+        DEFAULT_DB_URI: str = Field(default="", env="DEFAULT_DB_URI")        # e.g., postgresql://user:pw@host/db
 
+        # LLM / OpenRouter
+        OPENROUTER_API_KEY: str = Field(default="", env="OPENROUTER_API_KEY")
+        OPENROUTER_MODEL: str = Field(default="deepseek/deepseek-chat", env="OPENROUTER_MODEL")
 
-class AppConfig(BaseSettings):
-    """Application configuration using Pydantic v2"""
-    # ---------------------------------------------------------- #
-    # Flask / genel
-    # ---------------------------------------------------------- #
-    FLASK_ENV: str = Field("development", env="FLASK_ENV")
-    FLASK_DEBUG: bool = Field(True, env="FLASK_DEBUG")
+        # Worker
+        WORKER_BASE_URL: str = Field(default="http://localhost:9500", env="WORKER_BASE_URL")
 
-    # ---------------------------------------------------------- #
-    # OpenAI
-    # ---------------------------------------------------------- #
-    OPENAI_API_KEY: str = Field("", env="OPENAI_API_KEY")
+        # Charts
+        CHART_WIDTH: int = Field(default=800, env="CHART_WIDTH")
+        CHART_HEIGHT: int = Field(default=400, env="CHART_HEIGHT")
 
-    # ---------------------------------------------------------- #
-    # OpenRouter
-    # ---------------------------------------------------------- #
-    OPENROUTER_API_KEY: str = Field("", env="OPENROUTER_API_KEY")
-    OPENROUTER_MODEL: str = Field("openrouter/deepseek-chat-v3-0324:free", env="OPENROUTER_MODEL")
-
-    # ---------------------------------------------------------- #
-    # LangChain Configuration
-    # ---------------------------------------------------------- #
-    LANGCHAIN_TRACING_V2: bool = Field(False, env="LANGCHAIN_TRACING_V2")
-    LANGCHAIN_API_KEY: str = Field("", env="LANGCHAIN_API_KEY")
-
-    # ---------------------------------------------------------- #
-    # Database
-    # ---------------------------------------------------------- #
-    DEFAULT_DB_URI: str = Field(
-        "postgresql://postgres:2336@localhost:5432/happiness_index",
-        env="DEFAULT_DB_URI"
-    )
-    
-    # Base database URL for multi-database schema worker
-    BASE_DATABASE_URL: str = Field(
-        "postgresql+asyncpg://postgres:2336@localhost:5432/",
-        env="BASE_DATABASE_URL"
-    )
-
-    # ---------------------------------------------------------- #
-    # Vector storage
-    # ---------------------------------------------------------- #
-    VECTOR_STORE_PATH: str = Field(
-        str(ROOT_DIR / "storage" / "vectors"),
-        env="VECTOR_STORE_PATH"
-    )
-
-    # ---------------------------------------------------------- #
-    # Chart configuration
-    # ---------------------------------------------------------- #
-    CHART_WIDTH: int = Field(800, env="CHART_WIDTH")
-    CHART_HEIGHT: int = Field(400, env="CHART_HEIGHT")
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
-
+        class Config:
+            env_file = ".env"
+            env_file_encoding = "utf-8"
+            case_sensitive = True
+            extra = "allow"
+else:
+    class AppConfig:  # pragma: no cover - minimal fallback without pydantic
+        def __init__(self) -> None:
+            self.FLASK_ENV = os.getenv("FLASK_ENV", "development")
+            self.FLASK_DEBUG = os.getenv("FLASK_DEBUG", "1") not in {"0", "false", "False"}
+            self.SECRET_KEY = os.getenv("SECRET_KEY", "dev")
+            self.BASE_DATABASE_URL = os.getenv("BASE_DATABASE_URL", "")
+            self.DEFAULT_DB_URI = os.getenv("DEFAULT_DB_URI", "")
+            self.OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+            self.OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat")
+            self.WORKER_BASE_URL = os.getenv("WORKER_BASE_URL", "http://localhost:9500")
+            self.CHART_WIDTH = int(os.getenv("CHART_WIDTH", "800"))
+            self.CHART_HEIGHT = int(os.getenv("CHART_HEIGHT", "400"))
 
 @lru_cache()
 def get_config() -> AppConfig:
-    """Get cached configuration instance"""
+    """Return a cached configuration instance."""
     return AppConfig()

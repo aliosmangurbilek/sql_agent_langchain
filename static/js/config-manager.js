@@ -97,7 +97,7 @@ class ConfigManager {
         this.connectionResultDiv.innerHTML = '<span class="loading">Testing connection...</span>';
 
         try {
-            const response = await fetch('/api/test_connection', {
+            const response = await fetch('/api/test-connection', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

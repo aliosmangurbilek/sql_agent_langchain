@@ -68,28 +68,28 @@ class SchemaLogger {
         
         // Start monitoring
         this.schemaMonitoring = true;
-        this.simulateSchemaMonitoring();
+        if (window && window.DEMO_MODE === true) { this.simulateSchemaMonitoring(); }
     }
 
     stopSchemaMonitoring() {
         this.toggleSchemaMonitoringBtn.textContent = 'Start Monitoring';
         this.toggleSchemaMonitoringBtn.dataset.monitoring = 'false';
         this.toggleSchemaMonitoringBtn.className = 'btn btn-primary btn-sm';
-        
+
         this.schemaMonitoring = false;
         if (this.schemaEventSource) {
             this.schemaEventSource.close();
             this.schemaEventSource = null;
         }
-        
+
         this.addSchemaLogEntry('info', 'Schema monitoring stopped');
     }
 
     simulateSchemaMonitoring() {
         // This is a simulation - in real implementation, you'd connect to actual schema change events
         // For demonstration purposes only
-        if (!this.schemaMonitoring) return;
-        
+        if (!this.schemaMonitoring || !(window && window.DEMO_MODE === true)) return;
+
         // Simulate random schema events for demo
         setTimeout(() => {
             if (this.schemaMonitoring && Math.random() > 0.7) {
@@ -98,12 +98,12 @@ class SchemaLogger {
                     { type: 'embedding-refresh', message: '✅ Embeddings refreshed for "public.users" (5 vectors)' },
                     { type: 'table-drop', message: '🗑️ Table "temp_data" dropped from schema "public"' }
                 ];
-                
+
                 const action = actions[Math.floor(Math.random() * actions.length)];
                 this.addSchemaLogEntry('info', action.message, action.type);
             }
-            
-            this.simulateSchemaMonitoring();
+
+            if (window && window.DEMO_MODE === true) { this.simulateSchemaMonitoring(); }
         }, 5000 + Math.random() * 10000); // Random interval between 5-15 seconds
     }
 

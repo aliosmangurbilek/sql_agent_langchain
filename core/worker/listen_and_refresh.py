@@ -116,31 +116,31 @@ async def get_handles(db_name: str) -> Tuple[AsyncEngine, asyncpg.Connection]:
     return engine, conn
 
 
-async def refresh_embeddings(engine: AsyncEngine, schema: str, table: str, vectors: List[List[float]]) -> None:
+async def refresh_embeddings(engine: AsyncEngine, db_name: str, schema: str, table: str, vectors: List[List[float]]) -> None:
     """Refresh embeddings for a specific table."""
     async with engine.begin() as conn:
         # Delete existing embeddings for this table
         await conn.execute(
-            text('DELETE FROM schema_embeddings WHERE schema=:s AND "table"=:t'),
-            {"s": schema, "t": table},
+            text('DELETE FROM schema_embeddings WHERE db_name=:d AND schema=:s AND "table"=:t'),
+            {"d": db_name, "s": schema, "t": table},
         )
 
         # Insert new embeddings
         if vectors:
-            ins = text('INSERT INTO schema_embeddings(schema, "table", embedding) VALUES (:s, :t, :e)')
+            ins = text('INSERT INTO schema_embeddings(db_name, "schema", "table", embedding) VALUES (:d, :s, :t, :e)')
             for vec in vectors:
-                await conn.execute(ins, {"s": schema, "t": table, "e": vec})
+                await conn.execute(ins, {"d": db_name, "s": schema, "t": table, "e": vec})
 
         # Analyze table for better query performance
         await conn.execute(text("ANALYZE schema_embeddings"))
 
 
-async def remove_table_embeddings(engine: AsyncEngine, schema: str, table: str) -> None:
+async def remove_table_embeddings(engine: AsyncEngine, db_name: str, schema: str, table: str) -> None:
     """Delete embeddings for a dropped table."""
     async with engine.begin() as conn:
         await conn.execute(
-            text('DELETE FROM schema_embeddings WHERE schema=:s AND "table"=:t'),
-            {"s": schema, "t": table},
+            text('DELETE FROM schema_embeddings WHERE db_name=:d AND schema=:s AND "table"=:t'),
+            {"d": db_name, "s": schema, "t": table},
         )
         await conn.execute(text("ANALYZE schema_embeddings"))
 
@@ -166,7 +166,7 @@ async def handle_notification(payload: str) -> None:
         ]
 
         if command == "DROP TABLE" or not rows:
-            await remove_table_embeddings(engine, schema, table)
+            await remove_table_embeddings(engine, db_name, schema, table)
             logger.info(f"🗑️ Removed embeddings for {schema}.{table}")
         else:
             # Generate embeddings for table metadata
@@ -175,7 +175,7 @@ async def handle_notification(payload: str) -> None:
                 for r in rows
             ]
             vectors = embedding_model.embed_documents(texts)
-            await refresh_embeddings(engine, schema, table, vectors)
+            await refresh_embeddings(engine, db_name, schema, table, vectors)
             logger.info(f"✅ Refreshed embeddings for {schema}.{table} ({len(vectors)} vectors)")
 
     except Exception as e:

@@ -102,10 +102,13 @@ class ModelManager {
         
         // Group models by type
         const freeModels = models.filter(m => m.is_free);
+        const collator = new Intl.Collator(undefined, { sensitivity: 'base' });
+        freeModels.sort((a,b)=>collator.compare((a.name||a.id||'').toLowerCase(), (b.name||b.id||'').toLowerCase()));
         const paidModels = models.filter(m => !m.is_free);
-        
+        paidModels.sort((a,b)=>collator.compare((a.name||a.id||'').toLowerCase(), (b.name||b.id||'').toLowerCase()));
+
         console.log(`📊 Found ${freeModels.length} free models, ${paidModels.length} paid models`);
-        
+
         // Add free models first
         if (freeModels.length > 0) {
             const freeGroup = document.createElement('optgroup');
@@ -115,7 +118,7 @@ class ModelManager {
                 option.value = model.id;
                 // Use provider info if available
                 const providerText = model.provider ? ` (${model.provider})` : '';
-                option.textContent = `${model.name}${providerText} - Free`;
+                option.textContent = `${(model.name || model.id)}${providerText} - Free`;
                 if (model.description) {
                     option.title = model.description;
                 }
@@ -123,7 +126,7 @@ class ModelManager {
             });
             this.modelSelect.appendChild(freeGroup);
         }
-        
+
         // Add paid models
         if (paidModels.length > 0) {
             const paidGroup = document.createElement('optgroup');
@@ -131,7 +134,7 @@ class ModelManager {
             paidModels.forEach(model => {
                 const option = document.createElement('option');
                 option.value = model.id;
-                
+
                 // Handle pricing display
                 let pricingText = '';
                 if (model.pricing && model.pricing.prompt) {
@@ -139,9 +142,9 @@ class ModelManager {
                 } else if (model.total_price !== undefined) {
                     pricingText = ` ($${model.total_price.toFixed(6)}/1M tokens)`;
                 }
-                
+
                 const providerText = model.provider ? ` (${model.provider})` : '';
-                option.textContent = `${model.name}${providerText}${pricingText}`;
+                option.textContent = `${(model.name || model.id)}${providerText}${pricingText}`;
                 if (model.description) {
                     option.title = model.description;
                 }

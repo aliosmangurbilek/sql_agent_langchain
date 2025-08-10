@@ -908,3 +908,147 @@ body.dark-mode .log-entry {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
 }
+
+/* Enhanced Database Management Styles */
+.database-actions {
+    margin-top: 15px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.database-actions .btn-sm {
+    padding: 6px 12px;
+    font-size: 12px;
+    border-radius: 4px;
+    transition: all 0.3s ease;
+}
+
+.database-actions .btn-warning {
+    background-color: #ffc107;
+    color: #212529;
+    border: 1px solid #ffc107;
+}
+
+.database-actions .btn-warning:hover {
+    background-color: #e0a800;
+    border-color: #d39e00;
+}
+
+.database-actions .btn-secondary {
+    background-color: #6c757d;
+    color: white;
+    border: 1px solid #6c757d;
+}
+
+.database-actions .btn-secondary:hover {
+    background-color: #5a6268;
+    border-color: #545b62;
+}
+
+.schema-info-section {
+    margin-top: 20px;
+    padding: 15px;
+    background-color: var(--section-bg);
+    border-radius: 8px;
+    border: 1px solid #ddd;
+    display: none;
+}
+
+.schema-info-section.visible {
+    display: block;
+}
+
+.schema-info h4 {
+    margin-bottom: 10px;
+    color: var(--text-color);
+    font-size: 16px;
+}
+
+.schema-info p {
+    margin-bottom: 8px;
+    color: var(--text-color);
+}
+
+.table-list {
+    margin-top: 10px;
+}
+
+.table-list ul {
+    list-style-type: none;
+    padding-left: 0;
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.table-list li {
+    padding: 4px 8px;
+    margin: 2px 0;
+    background-color: rgba(0, 123, 255, 0.1);
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 12px;
+    color: var(--text-color);
+}
+
+.connection-status .success {
+    color: #28a745;
+    font-weight: 500;
+}
+
+.connection-status .error {
+    color: #dc3545;
+    font-weight: 500;
+}
+
+.connection-status .loading {
+    color: #007bff;
+    font-weight: 500;
+}
+
+/* Pulse animation for highlighted buttons */
+@keyframes pulse {
+    0% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(255, 107, 107, 0.7);
+    }
+    70% {
+        transform: scale(1.05);
+        box-shadow: 0 0 0 10px rgba(255, 107, 107, 0);
+    }
+    100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(255, 107, 107, 0);
+    }
+}
+
+/* Enhanced error messages */
+.error-message {
+    background-color: #f8d7da;
+    color: #721c24;
+    padding: 15px;
+    border-radius: 8px;
+    border: 1px solid #f5c6cb;
+    margin: 10px 0;
+}
+
+.dark-mode .error-message {
+    background-color: #472329;
+    color: #f8d7da;
+    border-color: #5c2834;
+}
+
+.success-message {
+    background-color: #d4edda;
+    color: #155724;
+    padding: 15px;
+    border-radius: 8px;
+    border: 1px solid #c3e6cb;
+    margin: 10px 0;
+}
+
+.dark-mode .success-message {
+    background-color: #1e3a28;
+    color: #d4edda;
+    border-color: #2d5a3d;
+}

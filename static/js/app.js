@@ -43,6 +43,9 @@ document.addEventListener('DOMContentLoaded', async function() {
     modelManager = new ModelManager();
     configManager = new ConfigManager();
     
+    // Initialize enhanced database manager
+    window.enhancedDbManager = new EnhancedDatabaseManager();
+    
     // Load saved configuration and defaults
     configManager.loadSavedConfiguration();
     await configManager.loadConfigDefaults();
@@ -189,6 +192,12 @@ async function executeQuery(generateChart = false) {
         return;
     }
 
+    // Check if database is properly prepared
+    if (window.enhancedDbManager && !window.enhancedDbManager.getCurrentDatabase()) {
+        UIUtils.showError('Please test your database connection first');
+        return;
+    }
+
     // Check if we can use cached data for chart generation
     if (generateChart && lastQueryResult && lastQueryQuestion === question && lastQueryResult.data) {
         console.log('🔄 Using cached data for chart generation');
@@ -236,7 +245,7 @@ async function executeQuery(generateChart = false) {
             
             handleQuerySuccess(result, generateChart);
         } else {
-            handleQueryError(result);
+            await handleQueryError(result, question, dbUri);
         }
 
         updateProgress(100, 'Complete!');
@@ -413,10 +422,59 @@ function handleQuerySuccess(result, isChart) {
     }
 }
 
-function handleQueryError(result) {
-    UIUtils.showError(`Query failed: ${result.error || result.message || 'Unknown error'}`);
+async function handleQueryError(result, question = '', dbUri = '') {
+    const errorMessage = result.error || result.message || 'Unknown error';
+    
+    // Check for specific "no relevant tables" error
+    if (errorMessage.toLowerCase().includes('no relevant tables') || 
+        errorMessage.toLowerCase().includes("couldn't find any relevant tables")) {
+        
+        // Provide enhanced error handling and guidance
+        let enhancedMessage = `❌ No relevant tables found for your question: "${question}"<br><br>`;
+        enhancedMessage += `🔧 <strong>Possible solutions:</strong><br>`;
+        enhancedMessage += `• Click "🔄 Rebuild Embeddings" to refresh table information<br>`;
+        enhancedMessage += `• Check if your database contains the data you're looking for<br>`;
+        enhancedMessage += `• Try rephrasing your question to be more specific<br>`;
+        enhancedMessage += `• Ensure your database connection is working properly<br><br>`;
+        
+        // Try to get table suggestions from the enhanced database manager
+        if (window.enhancedDbManager && dbUri) {
+            try {
+                const tables = await window.enhancedDbManager.searchTables(question, 5);
+                if (tables && tables.length > 0) {
+                    enhancedMessage += `📊 <strong>Available tables that might be relevant:</strong><br>`;
+                    tables.forEach(table => {
+                        enhancedMessage += `• ${table.table} (score: ${table.score?.toFixed(2) || 'N/A'})<br>`;
+                    });
+                } else {
+                    enhancedMessage += `📋 <strong>Tip:</strong> Try testing your database connection first to see available tables.`;
+                }
+            } catch (e) {
+                console.warn('Could not get table suggestions:', e);
+                enhancedMessage += `📋 <strong>Tip:</strong> Try testing your database connection first to see available tables.`;
+            }
+        }
+        
+        UIUtils.showError(enhancedMessage);
+        
+        // Offer automatic embedding rebuild
+        const rebuildBtn = document.getElementById('rebuild-embeddings-btn');
+        if (rebuildBtn) {
+            rebuildBtn.style.backgroundColor = '#ff6b6b';
+            rebuildBtn.style.animation = 'pulse 2s infinite';
+            setTimeout(() => {
+                rebuildBtn.style.backgroundColor = '';
+                rebuildBtn.style.animation = '';
+            }, 5000);
+        }
+        
+    } else {
+        // Handle other types of errors normally
+        UIUtils.showError(`Query failed: ${errorMessage}`);
+    }
+    
     if (sqlOutput) {
-        sqlOutput.textContent = `Error: ${result.error || result.message || 'Query execution failed'}`;
+        sqlOutput.textContent = `Error: ${errorMessage}`;
     }
 }
 
