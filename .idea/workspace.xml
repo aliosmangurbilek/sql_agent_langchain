@@ -5,35 +5,10 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="5cd59c77-9f96-46a1-b706-5d49be802e0c" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/api/routes_chart.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/routes_chart.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/api/routes_connection.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/routes_connection.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/api/routes_health.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/routes_health.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/api/routes_models.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/routes_models.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/api/routes_query.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/routes_query.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/api/routes_sse.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/routes_sse.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/api/routes_worker.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/routes_worker.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/api/utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/utils.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/app.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/config.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/core/charts/spec_generator.py" beforeDir="false" afterPath="$PROJECT_DIR$/core/charts/spec_generator.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/core/db/connection_test.py" beforeDir="false" afterPath="$PROJECT_DIR$/core/db/connection_test.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/core/db/embedder.py" beforeDir="false" afterPath="$PROJECT_DIR$/core/db/embedder.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/core/db/introspector.py" beforeDir="false" afterPath="$PROJECT_DIR$/core/db/introspector.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/core/db/query_engine.py" beforeDir="false" afterPath="$PROJECT_DIR$/core/db/query_engine.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/core/db/verify_sql.py" beforeDir="false" afterPath="$PROJECT_DIR$/core/db/verify_sql.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/core/worker/listen_and_refresh.py" beforeDir="false" afterPath="$PROJECT_DIR$/core/worker/listen_and_refresh.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/services/worker.py" beforeDir="false" afterPath="$PROJECT_DIR$/services/worker.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/sql/pgvector_schema.sql" beforeDir="false" afterPath="$PROJECT_DIR$/sql/pgvector_schema.sql" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/static/css/app.css" beforeDir="false" afterPath="$PROJECT_DIR$/static/css/app.css" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/static/js/app.js" beforeDir="false" afterPath="$PROJECT_DIR$/static/js/app.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/static/js/config-manager.js" beforeDir="false" afterPath="$PROJECT_DIR$/static/js/config-manager.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/static/js/model-manager.js" beforeDir="false" afterPath="$PROJECT_DIR$/static/js/model-manager.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/static/js/schema-logger.js" beforeDir="false" afterPath="$PROJECT_DIR$/static/js/schema-logger.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/static/js/ui-utils.js" beforeDir="false" afterPath="$PROJECT_DIR$/static/js/ui-utils.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/static/js/worker-manager.js" beforeDir="false" afterPath="$PROJECT_DIR$/static/js/worker-manager.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/templates/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/templates/index.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_verify_sql.py" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -166,7 +141,7 @@
       <workItem from="1754574119539" duration="22000" />
       <workItem from="1754638320881" duration="5669000" />
       <workItem from="1754655278026" duration="3856000" />
-      <workItem from="1754660753920" duration="2439000" />
+      <workItem from="1754660753920" duration="3038000" />
     </task>
     <task id="LOCAL-00001" summary="test">
       <option name="closed" value="true" />

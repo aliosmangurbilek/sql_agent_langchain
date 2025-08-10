@@ -28,9 +28,9 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from app.config import get_config
-
-from ..core.db.introspector import get_metadata
+# Fixed import paths
+from config import get_config
+from core.db.introspector import get_metadata
 
 # Configure logging
 logging.basicConfig(
@@ -50,7 +50,7 @@ embedding_model = HuggingFaceEmbeddings(
     encode_kwargs={"normalize_embeddings": True},
 )
 
-# FastAPI app for /set_db endpoint
+# FastAPI app for database switching and status
 app = FastAPI(title="Schema Worker API", version="1.0.0")
 
 
@@ -58,8 +58,15 @@ class DatabaseRequest(BaseModel):
     database: str
 
 
+# Keep original route for backward compatibility
 @app.post("/set_db")
-async def set_active_database(request: DatabaseRequest):
+async def set_active_database_legacy(request: DatabaseRequest):
+    return await switch_database(request)
+
+
+# New route expected by the Flask proxy (/api/worker/switch -> /switch)
+@app.post("/switch")
+async def switch_database(request: DatabaseRequest):
     """Set the active database for on-demand operations."""
     global ACTIVE_DB
     old_db = ACTIVE_DB
@@ -253,7 +260,7 @@ def signal_handler(signum, frame):
 
 
 async def run_fastapi_server():
-    """Run FastAPI server for /set_db endpoint."""
+    """Run FastAPI server for /switch endpoint."""
     config = uvicorn.Config(
         app=app,
         host="0.0.0.0",

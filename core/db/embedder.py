@@ -247,6 +247,19 @@ class DBEmbedder:
                 $$
                                """)
 
+            # Ensure the event trigger exists and is bound to the function
+            try:
+                exists = await conn.fetchval(
+                    "SELECT EXISTS (SELECT 1 FROM pg_event_trigger WHERE evtname = 'trg_schema_change')"
+                )
+                if not exists:
+                    await conn.execute(
+                        "CREATE EVENT TRIGGER trg_schema_change ON ddl_command_end EXECUTE PROCEDURE ddl_notify_schema_change()"
+                    )
+                    logger.info("✅ Created event trigger 'trg_schema_change'")
+            except Exception as e:
+                logger.warning(f"Could not ensure event trigger exists: {e}")
+
         finally:
             await conn.close()
 
