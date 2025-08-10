@@ -1,29 +1,18 @@
 """
-flask_app.config
-~~~~~~~    # ---------------------------------------------------------- #
-    # Flask / genel
-    # ---------------------------------------------------------- #
-    FLASK_ENV: str = Field("development", env="FLASK_ENV")
-    FLASK_DEBUG: bool = Field(True, env="FLASK_DEBUG")
+Application configuration
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    # ---------------------------------------------------------- #
-    # OpenRouter (Tek LLM Provider)
-    # ---------------------------------------------------------- #
-    OPENROUTER_API_KEY: str = Field("", env="OPENROUTER_API_KEY")
-    OPENROUTER_MODEL: str = Field("deepseek/deepseek-chat", env="OPENROUTER_MODEL")î yapılandırma katmanı.
-• .env (veya gerçek ortam değişkenleri) okunur
-• Pydantic BaseSettings → type-safe erişim
-• create_app() içinde   app.config.from_object(Settings())
+Pydantic-based settings loaded from environment variables (.env supported).
+Only OpenRouter is used as LLM provider.
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-
-from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings
+from dotenv import load_dotenv
 
 # .env dosyası varsa yükle
 load_dotenv()
@@ -33,7 +22,6 @@ ROOT_DIR = Path(__file__).resolve().parent
 
 class AppConfig(BaseSettings):
     """Application configuration using Pydantic v2"""
-
     # ---------------------------------------------------------- #
     # Flask / genel
     # ---------------------------------------------------------- #
@@ -41,17 +29,10 @@ class AppConfig(BaseSettings):
     FLASK_DEBUG: bool = Field(True, env="FLASK_DEBUG")
 
     # ---------------------------------------------------------- #
-    # OpenAI
-    # ---------------------------------------------------------- #
-    OPENAI_API_KEY: str = Field("", env="OPENAI_API_KEY")
-
-    # ---------------------------------------------------------- #
-    # OpenRouter
+    # OpenRouter (Tek LLM Provider)
     # ---------------------------------------------------------- #
     OPENROUTER_API_KEY: str = Field("", env="OPENROUTER_API_KEY")
-    OPENROUTER_MODEL: str = Field(
-        "openrouter/deepseek-chat-v3-0324:free", env="OPENROUTER_MODEL"
-    )
+    OPENROUTER_MODEL: str = Field("deepseek/deepseek-chat", env="OPENROUTER_MODEL")
 
     # ---------------------------------------------------------- #
     # LangChain Configuration
@@ -63,20 +44,16 @@ class AppConfig(BaseSettings):
     # Database
     # ---------------------------------------------------------- #
     DEFAULT_DB_URI: str = Field(
-        "postgresql://postgres:2336@localhost:5432/happiness_index",
-        env="DEFAULT_DB_URI",
-    )
-
-    # Base database URL for multi-database schema worker
-    BASE_DATABASE_URL: str = Field(
-        "postgresql+asyncpg://postgres:2336@localhost:5432/", env="BASE_DATABASE_URL"
+        "sqlite:///langchain_agent.db",
+        env="DEFAULT_DB_URI"
     )
 
     # ---------------------------------------------------------- #
     # Vector storage
     # ---------------------------------------------------------- #
     VECTOR_STORE_PATH: str = Field(
-        str(ROOT_DIR / "storage" / "vectors"), env="VECTOR_STORE_PATH"
+        str(ROOT_DIR / "storage" / "vectors"),
+        env="VECTOR_STORE_PATH"
     )
 
     # ---------------------------------------------------------- #
