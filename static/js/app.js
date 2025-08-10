@@ -10,9 +10,18 @@ const chartOutput = document.getElementById('chart-output');
 const loadingDiv = document.getElementById('loading');
 const errorDiv = document.getElementById('error');
 
+// Keep last query results to avoid re-running agent for charts
+let lastSql = null;
+let lastData = null;
+let lastQuestion = null;
+
 // Tab functionality
 const tabBtns = document.querySelectorAll('.tab-btn');
 const tabPanes = document.querySelectorAll('.tab-pane');
+
+// Import model module (when loaded as module)
+// Note: index.html must load this script as type="module"
+import { loadModelsInto } from './modules/models.js';
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', function() {
@@ -25,8 +34,8 @@ document.addEventListener('DOMContentLoaded', function() {
     // Setup event listeners
     setupEventListeners();
 
-    // Load models from OpenRouter
-    loadModels();
+    // Load models via module
+    loadModelsInto(modelSelect);
 
     // Load sample questions
     loadSampleQuestions();
@@ -50,13 +59,15 @@ function setupEventListeners() {
     // Refresh models button
     const refreshModelsBtn = document.getElementById('refresh-models-btn');
     if (refreshModelsBtn) {
-        refreshModelsBtn.addEventListener('click', () => {
+        refreshModelsBtn.addEventListener('click', async () => {
             refreshModelsBtn.disabled = true;
             refreshModelsBtn.textContent = '⏳';
-            loadModels().finally(() => {
+            try {
+                await loadModelsInto(modelSelect);
+            } finally {
                 refreshModelsBtn.disabled = false;
                 refreshModelsBtn.textContent = '🔄';
-            });
+            }
         });
     }
 
@@ -88,6 +99,18 @@ function showLoading(show = true) {
     loadingDiv.classList.toggle('hidden', !show);
     runQueryBtn.disabled = show;
     runChartBtn.disabled = show;
+    // Spinner feedback on runQuery button
+    if (show) {
+        runQueryBtn.dataset.originalText = runQueryBtn.textContent;
+        runQueryBtn.innerHTML = '⏳ Running...';
+        runQueryBtn.setAttribute('aria-busy', 'true');
+    } else {
+        if (runQueryBtn.dataset.originalText) {
+            runQueryBtn.textContent = runQueryBtn.dataset.originalText;
+            delete runQueryBtn.dataset.originalText;
+        }
+        runQueryBtn.removeAttribute('aria-busy');
+    }
 }
 
 function showError(message) {
@@ -97,6 +120,12 @@ function showError(message) {
 
 function hideError() {
     errorDiv.classList.add('hidden');
+}
+
+// Generic error handler used in fetch catch blocks
+function handleError(error) {
+    console.error('Request failed:', error);
+    showError(error?.message || 'An unexpected error occurred.');
 }
 
 function executeQuery() {
@@ -109,7 +138,12 @@ function executeQuery() {
         return;
     }
 
-    showLoading();
+    // Reset last results for new question
+    lastSql = null;
+    lastData = null;
+    lastQuestion = question;
+
+    showLoading(true);
     fetch('/api/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -118,7 +152,7 @@ function executeQuery() {
     .then(res => res.json())
     .then(handleQueryResponse)
     .catch(handleError)
-    .finally(hideLoading);
+    .finally(() => showLoading(false));
 }
 
 function generateChart() {
@@ -131,22 +165,36 @@ function generateChart() {
         return;
     }
 
-    showLoading();
+    if (!lastSql || !Array.isArray(lastData)) {
+        showError('Please run the query first to generate chart.');
+        return;
+    }
+
+    showLoading(true);
     fetch('/api/chart', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ db_uri: dbUri, question: question, model: model })
+        // Pass cached sql and data to avoid re-running agent
+        body: JSON.stringify({ db_uri: dbUri, question: question, model: model, sql: lastSql, data: lastData })
     })
     .then(res => res.json())
     .then(handleChartResponse)
     .catch(handleError)
-    .finally(hideLoading);
+    .finally(() => showLoading(false));
 }
 
 function handleQueryResponse(data) {
     if (data.error) {
         showError(data.error);
         return;
+    }
+
+    // Cache SQL and rows from agent to reuse for charts
+    if (data.sql) {
+        lastSql = data.sql;
+    }
+    if (data.data) {
+        lastData = data.data;
     }
 
     // Display agent answer
@@ -156,7 +204,12 @@ function handleQueryResponse(data) {
         sqlOutput.textContent = 'No answer returned';
     }
 
-    // Switch to SQL tab to show results
+    // Display data results if available
+    if (Array.isArray(lastData) && lastData.length > 0) {
+        dataOutput.textContent = JSON.stringify(lastData, null, 2);
+    }
+
+    // Stay on SQL tab by default
     switchTab('sql');
 }
 
@@ -166,14 +219,15 @@ function handleChartResponse(data) {
         return;
     }
 
-    // Display SQL query
+    // Display SQL query used for chart
     if (data.sql) {
         sqlOutput.textContent = data.sql;
     }
 
-    // Display data results
-    if (data.data && data.data.length > 0) {
-        dataOutput.textContent = JSON.stringify(data.data, null, 2);
+    // Display and cache data results
+    if (Array.isArray(data.data) && data.data.length > 0) {
+        lastData = data.data;
+        dataOutput.textContent = JSON.stringify(lastData, null, 2);
     }
 
     // Display chart
@@ -193,8 +247,16 @@ async function renderChart(vegaSpec) {
         chartOutput.innerHTML = '';
         chartOutput.classList.add('has-chart');
 
+        // Deep-clone and inject data if spec expects a named dataset
+        const spec = JSON.parse(JSON.stringify(vegaSpec || {}));
+        if (spec && spec.data && spec.data.name === 'table') {
+            const values = Array.isArray(lastData) ? lastData : [];
+            // Limit to avoid rendering huge datasets on the client
+            spec.data = { values: values.slice(0, 5000) };
+        }
+
         // Render the Vega-Lite chart
-        await vegaEmbed('#chart-output', vegaSpec, {
+        await vegaEmbed('#chart-output', spec, {
             theme: 'quartz',
             actions: {
                 export: true,
@@ -242,92 +304,13 @@ function loadSampleQuestions() {
 // Health check function
 async function checkHealth() {
     try {
-        const response = await fetch('/healthz');
+        const response = await fetch('/api/healthz');
         const data = await response.json();
         console.log('Health check:', data);
-        return data.status === 'healthy';
+        return data.status === 'ok';
     } catch (error) {
         console.error('Health check failed:', error);
         return false;
-    }
-}
-
-// Load models from OpenRouter API
-async function loadModels() {
-    try {
-        const response = await fetch('/api/models');
-        const data = await response.json();
-        
-        if (response.ok) {
-            populateModelSelect(data.models);
-        } else {
-            console.error('Failed to load models:', data.error);
-            // Fallback to default models
-            populateModelSelect([
-                { id: 'deepseek/deepseek-chat', name: 'DeepSeek Chat (Free)', is_free: true },
-                { id: 'meta-llama/llama-3.1-8b-instruct:free', name: 'Llama 3.1 8B (Free)', is_free: true },
-                { id: 'qwen/qwen-2.5-7b-instruct:free', name: 'Qwen 2.5 7B (Free)', is_free: true }
-            ]);
-        }
-    } catch (error) {
-        console.error('Error loading models:', error);
-        // Fallback to default models
-        populateModelSelect([
-            { id: 'deepseek/deepseek-chat', name: 'DeepSeek Chat (Free)', is_free: true },
-            { id: 'meta-llama/llama-3.1-8b-instruct:free', name: 'Llama 3.1 8B (Free)', is_free: true },
-            { id: 'qwen/qwen-2.5-7b-instruct:free', name: 'Qwen 2.5 7B (Free)', is_free: true }
-        ]);
-    }
-}
-
-function populateModelSelect(models) {
-    // Clear existing options
-    modelSelect.innerHTML = '';
-    
-    // Add default option
-    const defaultOption = document.createElement('option');
-    defaultOption.value = '';
-    defaultOption.textContent = 'Select a model...';
-    modelSelect.appendChild(defaultOption);
-    
-    // Group models by free/paid
-    const freeModels = models.filter(m => m.is_free);
-    const paidModels = models.filter(m => !m.is_free);
-    
-    // Add free models first
-    if (freeModels.length > 0) {
-        const freeGroup = document.createElement('optgroup');
-        freeGroup.label = '🆓 Free Models';
-        freeModels.forEach(model => {
-            const option = document.createElement('option');
-            option.value = model.id;
-            option.textContent = `${model.name} (${model.provider})`;
-            freeGroup.appendChild(option);
-        });
-        modelSelect.appendChild(freeGroup);
-    }
-    
-    // Add paid models
-    if (paidModels.length > 0) {
-        const paidGroup = document.createElement('optgroup');
-        paidGroup.label = '💰 Paid Models';
-        paidModels.forEach(model => {
-            const option = document.createElement('option');
-            option.value = model.id;
-            option.textContent = `${model.name} (${model.provider})`;
-            paidGroup.appendChild(option);
-        });
-        modelSelect.appendChild(paidGroup);
-    }
-    
-    // Enable the select and restore saved selection
-    modelSelect.disabled = false;
-    const savedModel = localStorage.getItem('selectedModel');
-    if (savedModel && Array.from(modelSelect.options).some(option => option.value === savedModel)) {
-        modelSelect.value = savedModel;
-    } else if (freeModels.length > 0) {
-        // Default to first free model
-        modelSelect.value = freeModels[0].id;
     }
 }
 
@@ -337,3 +320,33 @@ checkHealth().then(healthy => {
         showError('Backend service is not responding. Please check the server.');
     }
 });
+
+// Extend event listeners to include Test Connection button
+(function extendTestConnectionListener(){
+    const testBtn = document.getElementById('test-connection-btn');
+    if (!testBtn) return;
+    testBtn.addEventListener('click', async () => {
+        const dbUri = dbUriInput.value.trim();
+        const resultDiv = document.getElementById('test-connection-result');
+        if (!dbUri) {
+            resultDiv.innerHTML = '<span class="error">Please enter a database URI first!</span>';
+            return;
+        }
+        resultDiv.innerHTML = '<span class="loading">Testing connection...</span>';
+        try {
+            const response = await fetch('/api/test_connection', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ db_uri: dbUri })
+            });
+            const result = await response.json();
+            if (response.ok) {
+                resultDiv.innerHTML = '<span class="success">✅ Connection successful!</span>';
+            } else {
+                resultDiv.innerHTML = `<span class="error">❌ Connection failed: ${result.error || result.message || 'Unknown error'}</span>`;
+            }
+        } catch (error) {
+            resultDiv.innerHTML = `<span class="error">❌ Error: ${error.message}</span>`;
+        }
+    });
+})();

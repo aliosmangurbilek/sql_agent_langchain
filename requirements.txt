@@ -14,18 +14,20 @@ sqlalchemy
 sqlglot
 psycopg2-binary
 pgvector
-scann
+
+# Vector stores
 sentence-transformers
+
 # Configuration and utilities
 pydantic
 pydantic-settings
 python-dotenv
 requests
-requests
 
 # Chart and data visualization dependencies
 vega-datasets
 pandas
+numpy
 
 # Development and testing
 pytest

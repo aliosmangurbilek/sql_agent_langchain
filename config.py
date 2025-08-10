@@ -1,31 +1,18 @@
 """
-flask_app.config
-~~~~~~~    # ---------------------------------------------------------- #
-    # Flask / genel
-    # ---------------------------------------------------------- #
-    FLASK_ENV: str = Field("development", env="FLASK_ENV")
-    FLASK_DEBUG: bool = Field(True, env="FLASK_DEBUG")
+Application configuration
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    # ---------------------------------------------------------- #
-    # OpenRouter (Tek LLM Provider)
-    # ---------------------------------------------------------- #
-    OPENROUTER_API_KEY: str = Field("", env="OPENROUTER_API_KEY")
-    OPENROUTER_MODEL: str = Field("deepseek/deepseek-chat", env="OPENROUTER_MODEL")î yapılandırma katmanı.
-• .env (veya gerçek ortam değişkenleri) okunur
-• Pydantic BaseSettings → type-safe erişim
-• create_app() içinde   app.config.from_object(Settings())
+Pydantic-based settings loaded from environment variables (.env supported).
+Only OpenRouter is used as LLM provider.
 """
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict
-
-from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings
+from dotenv import load_dotenv
 
 # .env dosyası varsa yükle
 load_dotenv()
@@ -42,15 +29,10 @@ class AppConfig(BaseSettings):
     FLASK_DEBUG: bool = Field(True, env="FLASK_DEBUG")
 
     # ---------------------------------------------------------- #
-    # OpenAI
-    # ---------------------------------------------------------- #
-    OPENAI_API_KEY: str = Field("", env="OPENAI_API_KEY")
-
-    # ---------------------------------------------------------- #
-    # OpenRouter
+    # OpenRouter (Tek LLM Provider)
     # ---------------------------------------------------------- #
     OPENROUTER_API_KEY: str = Field("", env="OPENROUTER_API_KEY")
-    OPENROUTER_MODEL: str = Field("openrouter/deepseek-chat-v3-0324:free", env="OPENROUTER_MODEL")
+    OPENROUTER_MODEL: str = Field("deepseek/deepseek-chat", env="OPENROUTER_MODEL")
 
     # ---------------------------------------------------------- #
     # LangChain Configuration

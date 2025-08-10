@@ -6,7 +6,10 @@ POST /api/chart
 Body (JSON):
 {
   "db_uri": "postgresql://user:pw@localhost:5432/pagila",
-  "question": "monthly rentals per store in 2005"
+  "question": "monthly rentals per store in 2005",
+  // Optional fast-path to avoid re-running agent:
+  "sql": "SELECT ...",
+  "data": [ { ... }, ... ]
 }
 
 Response:
@@ -22,6 +25,7 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
+from typing import List, Dict, Any
 
 from flask import Blueprint, jsonify, request
 from werkzeug.exceptions import BadRequest
@@ -34,7 +38,7 @@ bp = Blueprint("chart", __name__, url_prefix="/api")
 
 
 @lru_cache(maxsize=16)
-def _get_engine(db_uri: str, llm_model: str = "gpt-4o-mini") -> QueryEngine:
+def _get_engine(db_uri: str, llm_model: str = "openai/gpt-4o-mini") -> QueryEngine:
     # Her db_uri ve llm_model kombinasyonu için bir kere QueryEngine oluştur
     # Bu sayede aynı veritabanı için birden fazla kez embedding yapmayız
     return QueryEngine(db_uri, llm_model=llm_model)
@@ -45,11 +49,8 @@ def run_chart():
     """
     Doğal dil isteğini alır → SQL + veri → Vega-Lite spec döner.
 
-    Front-end tarafı:
-      • Dönen `data` dizisini doğrudan inline-data olarak kullanabilir
-        *veya* ayrı `/api/query` çağrısından aldığı veri ile aynı yapıdır.
-      • `vega_spec` içindeki `"data": {"name": "table"}`
-        ise front-end uygun şekilde embed edecektir.
+    Eğer body içerisinde `sql` ve/veya `data` verilmişse agent tekrar
+    çalıştırılmaz; doğrudan bu verilerden grafik spec'i üretilir.
     """
     if not request.is_json:
         raise BadRequest("Content-Type must be application/json")
@@ -57,26 +58,41 @@ def run_chart():
     body = request.get_json(silent=True) or {}
     db_uri = body.get("db_uri")
     question = body.get("question")
-    model = body.get("model", "gpt-4o-mini")  # Default to gpt-4o-mini if not specified
+    model = body.get("model", "openai/gpt-4o-mini")
 
     if not db_uri or not question:
         raise BadRequest("Both 'db_uri' and 'question' fields are required")
 
     try:
-        qe = _get_engine(db_uri, llm_model=model)
-        result = qe.ask(question)              # {"sql", "data", "rowcount"}
+        sql = body.get("sql")
+        rows: List[Dict[str, Any]] | None = body.get("data")
 
-        # Grafik spec'ini üret
+        if sql and isinstance(rows, list):
+            # Fast-path: Frontend'den gelen sonuçları kullan
+            result_sql = sql
+            result_rows = rows
+        else:
+            # Gerekirse agent'i bir kez çalıştır
+            qe = _get_engine(db_uri, llm_model=model)
+            result = qe.ask(question)              # {"answer", "sql", "data"}
+            result_sql = result.get("sql", "")
+            result_rows = result.get("data") or []
+
+        rowcount = len(result_rows) if isinstance(result_rows, list) else 0
+
+        # Grafik spec'ini üret (tek geçiş, agent yok)
         vega_spec = generate_chart_spec(
             question=question,
-            sql=result["sql"],
-            data=result["data"],
+            sql=result_sql,
+            data=result_rows,
         )
 
         return (
             jsonify(
                 {
-                    **result,         # sql, data, rowcount
+                    "sql": result_sql,
+                    "data": result_rows,
+                    "rowcount": rowcount,
                     "vega_spec": vega_spec,
                 }
             ),

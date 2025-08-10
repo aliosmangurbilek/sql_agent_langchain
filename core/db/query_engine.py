@@ -20,6 +20,8 @@ from langchain_community.utilities.sql_database import SQLDatabase
 from langchain_community.utilities.sql_database import truncate_word
 from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
+from core.db.verify_sql import verify_sql  # SQL guardrail
+from core.db.embedder import DBEmbedder  # Table selection via embeddings
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,18 @@ class LoggingSQLDatabase(SQLDatabase):
         parameters: Dict[str, Any] | None = None,
         execution_options: Dict[str, Any] | None = None,
     ) -> sa.engine.Result | str | list[Dict[str, Any]]:
+        # Keep a copy of incoming SQL (string form)
+        raw_sql = str(command)
+
+        # Verify and possibly rewrite SQL (add LIMIT, block mutations, etc.)
+        try:
+            safe_sql = verify_sql(raw_sql, engine=self._engine, auto_limit=True, cost_guard=False)
+            command = safe_sql
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"SQL verification failed: {e}")
+            # Re-raise to block execution of unsafe SQL
+            raise
+
         self.last_query = str(command)
         result = self._execute(
             command,
@@ -43,12 +57,13 @@ class LoggingSQLDatabase(SQLDatabase):
             parameters=parameters,
             execution_options=execution_options,
         )
-        self.last_result = result
 
+        # Convert to JSON-serialisable rows list
         if fetch == "cursor":
+            self.last_result = []  # not serialisable; keep empty
             return result
 
-        res = [
+        rows_as_dicts = [
             {
                 column: truncate_word(value, length=self._max_string_length)
                 for column, value in r.items()
@@ -56,8 +71,14 @@ class LoggingSQLDatabase(SQLDatabase):
             for r in result
         ]
 
+        # Store JSON-safe result for API usage
+        self.last_result = rows_as_dicts
+
+        # Preserve original return contract of SQLDatabase.run
         if not include_columns:
-            res = [tuple(row.values()) for row in res]
+            res = [tuple(row.values()) for row in rows_as_dicts]
+        else:
+            res = rows_as_dicts
 
         if not res:
             return ""
@@ -101,9 +122,19 @@ class QueryEngine:
             }
         )
 
+        # Embedding-based table selector
+        self.embedder = DBEmbedder(self.engine)
+
         self.db = LoggingSQLDatabase(self.engine)
         toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
-        self.agent = create_sql_agent(llm=self.llm, toolkit=toolkit, verbose=False)
+        self.agent = create_sql_agent(
+            llm=self.llm,
+            toolkit=toolkit,
+            verbose=True,
+            agent_executor_kwargs={
+                "handle_parsing_errors": True
+            },
+        )
 
         logger.info(f"Using OpenRouter with model: {llm_model}")
 
@@ -112,14 +143,58 @@ class QueryEngine:
     # ------------------------------------------------------------------ #
 
     def ask(self, nl_query: str) -> Dict[str, Any]:
-        """Doğal dil sorusunu LangChain SQL ajanına ilet."""
+        """Doğal dil sorusunu LangChain SQL ajanına ilet.
+        Embedding ile en alakalı tabloları seçip ajanı sınırlı şema ile koşturur.
+        """
+        # 1) Relevant tables via embeddings (best-effort)
+        db_for_run: LoggingSQLDatabase
+        try:
+            hits = self.embedder.similarity_search(nl_query, k=6)
+            # Log embedding hits for observability
+            try:
+                hit_summ = [
+                    f"{(h.get('schema') + '.' if h.get('schema') else '')}{h.get('table')} (score={h.get('score'):.3f})"
+                    for h in hits if h.get('table')
+                ]
+                logger.info("Embedding hits: %s", ", ".join(hit_summ))
+            except Exception:
+                logger.debug("Could not log embedding hits; continuing.")
+            tables = []
+            for h in hits:
+                t = h.get("table")
+                if not t:
+                    continue
+                s = (h.get("schema") or "").strip()
+                qualified = f"{s}.{t}" if s else t
+                if qualified not in tables:
+                    tables.append(qualified)
+            if tables:
+                logger.info("Restricting agent to tables: %s", ", ".join(tables))
+                db_for_run = LoggingSQLDatabase(self.engine, include_tables=tables)
+            else:
+                db_for_run = self.db
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Embedding-based table selection failed, falling back. Reason: {e}")
+            db_for_run = self.db
 
-        result = self.agent.invoke({"input": nl_query})
+        # 2) Build a transient agent bound to the selected DB
+        toolkit = SQLDatabaseToolkit(db=db_for_run, llm=self.llm)
+        agent = create_sql_agent(
+            llm=self.llm,
+            toolkit=toolkit,
+            verbose=True,
+            agent_executor_kwargs={
+                "handle_parsing_errors": True
+            },
+        )
+
+        # 3) Invoke and return
+        result = agent.invoke({"input": nl_query})
         answer = result.get("output", "") if isinstance(result, dict) else str(result)
 
         return {
             "answer": answer,
-            "sql": getattr(self.db, "last_query", ""),
-            "data": getattr(self.db, "last_result", []),
+            "sql": getattr(db_for_run, "last_query", ""),
+            "data": getattr(db_for_run, "last_result", []),
         }
 

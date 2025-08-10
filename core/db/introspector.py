@@ -15,39 +15,46 @@ Usage
 """
 
 # Core imports
-from collections import defaultdict
 from typing import Any, Dict, List
 import warnings
 import sqlalchemy as sa
+
 # Suppress SAWarning for unrecognized 'vector' column types
-warnings.filterwarnings(
-    'ignore',
-    r"Did not recognize type 'vector' of column",
-    category=Warning,
-    module='sqlalchemy'
-)
-# Suppress SAWarning for unrecognized 'vector' types
-import warnings
 try:
-    from sqlalchemy.exc import SAWarning
+    from sqlalchemy.exc import SAWarning  # type: ignore
     warnings.filterwarnings(
         'ignore',
         r"Did not recognize type 'vector' of column",
         category=SAWarning
     )
-except ImportError:
-    pass
+except Exception:
+    # Fallback for environments without SAWarning symbol
+    warnings.filterwarnings(
+        'ignore',
+        r"Did not recognize type 'vector' of column",
+        category=Warning,
+        module='sqlalchemy'
+    )
 
 __all__ = ["get_metadata"]
 
 
 def _classify(coltype: sa.types.TypeEngine) -> str:
     """Rough heuristic to bucket SQLAlchemy types into 'numeric', 'datetime',
-    'vector', or 'categorical'. Extend as needed."""
-    if isinstance(coltype, (sa.Integer, sa.Numeric, sa.Float, sa.DECIMAL)):
+    'vector', 'boolean', or 'categorical'. Extend as needed."""
+    # Integer-like (incl. small/big)
+    if isinstance(coltype, (sa.SmallInteger, sa.Integer, sa.BigInteger, sa.Numeric, sa.Float, sa.DECIMAL)):
         return "numeric"
     if isinstance(coltype, (sa.Date, sa.DateTime, sa.TIMESTAMP)):
         return "datetime"
+    # Time/interval types
+    if hasattr(sa, 'Time') and isinstance(coltype, getattr(sa, 'Time')):
+        return "datetime"
+    if hasattr(sa, 'Interval') and isinstance(coltype, getattr(sa, 'Interval')):
+        return "datetime"
+    # Booleans
+    if isinstance(coltype, sa.Boolean):
+        return "boolean"
     # PostgreSQL vector tipi için string kontrolü
     if 'vector' in str(coltype).lower():
         return "vector"
@@ -66,32 +73,82 @@ def get_metadata(engine: sa.Engine, sample_rows: int = 0) -> List[Dict[str, Any]
     inspector = sa.inspect(engine)
     meta: List[Dict[str, Any]] = []
 
-    for table_name in inspector.get_table_names():
-        for col in inspector.get_columns(table_name):
-            # Skip pgvector or other vector columns in metadata
-            col_type = str(col.get('type', '')).lower()
-            if 'vector' in col_type:
-                continue
-            # Skip vector column types (e.g., pgvector)
-            if 'vector' in str(col.get('type', '')).lower():
-                continue
-            record: Dict[str, Any] = {
-                "table": table_name,
-                "column": col["name"],
-                "type": str(col["type"]),
-                "category": _classify(col["type"]),
-            }
-            if sample_rows > 0:
-                try:
-                    sql = sa.text(
-                        f"SELECT {sa.sql.quote_identifier(col['name'])} FROM "
-                        f"{sa.sql.quote_identifier(table_name)} LIMIT :limit"
-                    )
-                    with engine.connect() as conn:
-                        rows = conn.execute(sql, {"limit": sample_rows}).scalars().all()
-                    record["sample"] = rows
-                except Exception:  # noqa: BLE001
-                    record["sample"] = []  # ignore missing perms, etc.
-            meta.append(record)
+    # Collect schemas: default schema + non-system schemas if available
+    schemas: List[str] = []
+    try:
+        default_schema = getattr(inspector, 'default_schema_name', None)
+        if default_schema:
+            schemas.append(default_schema)
+        for sch in inspector.get_schema_names():
+            if sch not in schemas and sch not in ("information_schema", "pg_catalog"):
+                schemas.append(sch)
+    except Exception:
+        # Fallback: single implicit schema
+        schemas = [None]  # type: ignore
+
+    metadata = sa.MetaData()
+    for schema in schemas:
+        try:
+            table_names = inspector.get_table_names(schema=schema)  # type: ignore[arg-type]
+        except Exception:
+            table_names = inspector.get_table_names()
+        for table_name in table_names:
+            # Reflect table once for Core-based sampling
+            try:
+                table_obj = sa.Table(table_name, metadata, autoload_with=engine, schema=schema)
+            except Exception:
+                table_obj = None
+
+            for col in inspector.get_columns(table_name, schema=schema):
+                # Skip vector or unknown vector-like columns
+                col_type_str = str(col.get('type', '')).lower()
+                if 'vector' in col_type_str:
+                    continue
+
+                record: Dict[str, Any] = {
+                    "schema": schema or "",
+                    "table": table_name,
+                    "column": col["name"],
+                    "type": str(col["type"]),
+                    "category": _classify(col["type"]),
+                }
+
+                if sample_rows > 0 and table_obj is not None:
+                    try:
+                        col_name = col["name"]
+                        if col_name in table_obj.c:  # type: ignore[operator]
+                            stmt = sa.select(table_obj.c[col_name]).limit(sample_rows)
+                            with engine.connect() as conn:
+                                rows = conn.execute(stmt).scalars().all()
+                            record["sample"] = rows
+                        else:
+                            record["sample"] = []
+                    except Exception:
+                        record["sample"] = []  # best-effort only
+
+                meta.append(record)
 
     return meta
+
+
+if __name__ == "__main__":
+    # Minimal CLI to inspect a database and print a compact metadata summary
+    import argparse
+    import json
+    import sqlalchemy as sa
+
+    parser = argparse.ArgumentParser(description="Print database structural metadata")
+    parser.add_argument("db_uri", help="SQLAlchemy connection URI, e.g. postgresql://user:pass@host:5432/db")
+    parser.add_argument("--sample", type=int, default=0, help="Sample up to N values per column (may be slow)")
+    parser.add_argument("--limit", type=int, default=10, help="Limit output rows for readability")
+    args = parser.parse_args()
+
+    eng = sa.create_engine(args.db_uri)
+    meta = get_metadata(eng, sample_rows=args.sample)
+
+    # Print a compact view first
+    unique_tables = sorted({m["table"] for m in meta})
+    print(f"Tables ({len(unique_tables)}):", ", ".join(unique_tables))
+    print(f"Columns total: {len(meta)}")
+    print("Sample (limited):")
+    print(json.dumps(meta[: args.limit], indent=2))

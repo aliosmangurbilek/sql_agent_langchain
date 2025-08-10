@@ -12,27 +12,16 @@ Heuristikler
 3. Yalnızca iki sayısal alan → Scatter plot
 4. Diğer durumlar → Tablo (arkaplanda bar gömme)
 
-`use_llm=True` parametresi verilirse (ve ortamda OPENAI_API_KEY varsa)
-heuristik çıktıyı prompt'layarak ChatGPT'den iyileştirilmiş spec alınır.
+Sadece heuristik yaklaşım kullanılır; OpenAI bağımlılığı kaldırıldı.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
-
-# İsteğe bağlı LLM
-try:
-    from langchain_openai import ChatOpenAI
-    _OPENAI_READY = bool(os.getenv("OPENAI_API_KEY"))
-except ModuleNotFoundError:  # langchain kurulu değilse
-    ChatOpenAI = None  # type: ignore
-    _OPENAI_READY = False
-
 
 # ------------------------------------------------------------------ #
 # Public API
@@ -44,10 +33,10 @@ def generate_chart_spec(
     sql: str,
     data: List[Dict[str, Any]],
     *,
-    use_llm: bool = False,
+    use_llm: bool = False,  # kept for API compatibility, ignored
 ) -> Dict[str, Any]:
     """
-    Heuristik (ve isteğe bağlı LLM) tabanlı Vega-Lite spec üret.
+    Heuristik tabanlı Vega-Lite spec üret.
 
     Parameters
     ----------
@@ -57,8 +46,8 @@ def generate_chart_spec(
         Çalıştırılan SQL (tool-tip için).
     data : list[dict]
         QueryEngine'den gelen satırlar (ilk ~100 satır yeter).
-    use_llm : bool, default False
-        True ise OpenAI modeliyle heuristik spec'i iyileştir.
+    use_llm : bool, default False (ignored)
+        Eskiden LLM post-processing içindi; artık kullanılmıyor.
 
     Returns
     -------
@@ -71,15 +60,6 @@ def generate_chart_spec(
     field_types = _infer_field_types(data)
     chart_type, enc = _choose_chart(field_types, data)
     spec = _build_spec(chart_type, enc, question, sql)
-
-    # İsteğe bağlı LLM post-processing
-    if use_llm and _OPENAI_READY:
-        try:
-            spec = _llm_refine_spec(spec, question)
-        except Exception:  # noqa: BLE001
-            # LLM başarısızsa heuristik spec ile devam
-            pass
-
     return spec
 
 
@@ -156,6 +136,7 @@ def _rank_nominal_fields(rows: List[Dict[str, Any]], fields: List[str]) -> List[
 
 
 def _rank_temporal_fields(rows: List[Dict[str, Any]], fields: List[str]) -> List[str]:
+    import numpy as _np
     ranges = {}
     for f in fields:
         vals = []
@@ -164,11 +145,11 @@ def _rank_temporal_fields(rows: List[Dict[str, Any]], fields: List[str]) -> List
             if v is None:
                 continue
             try:
-                vals.append(np.datetime64(v))
+                vals.append(_np.datetime64(v))
             except Exception:
                 pass
         if vals:
-            ranges[f] = float((max(vals) - min(vals)).astype('timedelta64[s]') / np.timedelta64(1, 's'))
+            ranges[f] = float((max(vals) - min(vals)).astype('timedelta64[s]') / _np.timedelta64(1, 's'))
         else:
             ranges[f] = 0.0
     return sorted(fields, key=lambda x: ranges[x], reverse=True)
@@ -216,47 +197,25 @@ def _build_spec(chart: str, enc: Dict[str, Any], title: str, sql: str) -> Dict[s
 
 
 # ------------------------------------------------------------------ #
-# LLM refinement (isteğe bağlı)
-# ------------------------------------------------------------------ #
-
-
-def _llm_refine_spec(spec: Dict[str, Any], question: str) -> Dict[str, Any]:
-    """OpenAI ile heuristik spec'i iyileştir (ör. renk, sorting, axis)."""
-    if ChatOpenAI is None:
-        return spec
-    llm = ChatOpenAI(temperature=0.0, model="gpt-4o-mini")
-
-    system = (
-        "You are a data visualisation expert. "
-        "Given a draft Vega-Lite spec and the user's question, "
-        "return an improved Vega-Lite v5 JSON. "
-        "If the draft is already ok, just return it unchanged."
-    )
-    user = (
-        f"User question:\n{question}\n\n"
-        f"Draft spec JSON:\n{json.dumps(spec, indent=2)}"
-    )
-    resp = llm([("system", system), ("user", user)])
-    try:
-        refined = json.loads(resp[0].content.strip("```json").strip())
-        return refined
-    except json.JSONDecodeError:
-        # LLM çıktısı parse edilemediyse orijinali koru
-        return spec
-
-
-# ------------------------------------------------------------------ #
 # Util
 # ------------------------------------------------------------------ #
 
 
 def _looks_temporal(col: str, val: Any) -> bool:
     pat = re.compile(r"(date|time|year|month)", re.I)
-    return bool(pat.search(col)) or isinstance(val, (np.datetime64,))  # noqa: E721
+    try:
+        import numpy as _np
+        return bool(pat.search(col)) or isinstance(val, (_np.datetime64,))  # noqa: E721
+    except Exception:
+        return bool(pat.search(col))
 
 
 def _is_numeric(val: Any) -> bool:
-    return isinstance(val, (int, float, np.number))
+    try:
+        import numpy as _np
+        return isinstance(val, (int, float, _np.number))
+    except Exception:
+        return isinstance(val, (int, float))
 
 
 def _vl_type(field: str, chart: str) -> str:
