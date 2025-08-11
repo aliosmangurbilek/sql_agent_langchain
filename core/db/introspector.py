@@ -61,74 +61,99 @@ def _classify(coltype: sa.types.TypeEngine) -> str:
     return "categorical"
 
 
-def get_metadata(engine: sa.Engine, sample_rows: int = 0) -> List[Dict[str, Any]]:
-    """Return a list of dicts describing every column in the database.
+def _classify_from_str(type_str: str) -> str:
+    """String-based type classifier for fast-path (Postgres catalog)."""
+    s = (type_str or "").lower()
+    if "vector" in s:
+        return "vector"
+    if any(tok in s for tok in ["int", "numeric", "decimal", "double", "real", "float", "serial"]):
+        return "numeric"
+    if any(tok in s for tok in ["date", "time", "timestamp", "timestamptz", "interval", "year", "month"]):
+        return "datetime"
+    if "bool" in s:
+        return "boolean"
+    return "categorical"
 
-    Parameters
-    ----------
-    engine        : SQLAlchemy Engine already connected.
-    sample_rows   : If >0, fetch up to *sample_rows* example values per column
-                    (expensive on large tables; disabled by default).
+
+def _quote_ident(name: str) -> str:
+    name = name or ""
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _get_metadata_pg_fast(engine: sa.Engine, sample_rows: int = 0) -> List[Dict[str, Any]]:
+    """Fast metadata collection using PostgreSQL catalogs in a single query.
+
+    Returns rows: {schema, table, column, type, category[, sample]}
+    Skips system schemas and vector columns.
     """
-    inspector = sa.inspect(engine)
+    sql = sa.text(
+        r"""
+        SELECT
+            n.nspname AS schema,
+            c.relname AS table,
+            a.attname AS column,
+            format_type(a.atttypid, a.atttypmod) AS type
+        FROM pg_attribute a
+        JOIN pg_class c ON a.attrelid = c.oid
+        JOIN pg_namespace n ON c.relnamespace = n.oid
+        WHERE a.attnum > 0 AND NOT a.attisdropped
+          AND n.nspname NOT IN ('pg_catalog','information_schema')
+          AND c.relkind IN ('r','v','m','p')  -- table, view, materialized, partitioned
+          AND format_type(a.atttypid, a.atttypmod) !~* 'vector'
+        ORDER BY n.nspname, c.relname, a.attnum
+        """
+    )
     meta: List[Dict[str, Any]] = []
+    with engine.connect() as conn:
+        rows = conn.execute(sql).mappings().all()
+    for r in rows:
+        schema = r["schema"] or ""
+        table = r["table"]
+        col   = r["column"]
+        typ   = r["type"]
+        if "vector" in (typ or "").lower():
+            continue
+        rec: Dict[str, Any] = {
+            "schema": schema,
+            "table": table,
+            "column": col,
+            "type": typ,
+            "category": _classify_from_str(typ),
+        }
+        meta.append(rec)
 
-    # Collect schemas: default schema + non-system schemas if available
-    schemas: List[str] = []
-    try:
-        default_schema = getattr(inspector, 'default_schema_name', None)
-        if default_schema:
-            schemas.append(default_schema)
-        for sch in inspector.get_schema_names():
-            if sch not in schemas and sch not in ("information_schema", "pg_catalog"):
-                schemas.append(sch)
-    except Exception:
-        # Fallback: single implicit schema
-        schemas = [None]  # type: ignore
-
-    metadata = sa.MetaData()
-    for schema in schemas:
+    if sample_rows > 0:
+        # Best-effort sampling per (schema, table, column)
         try:
-            table_names = inspector.get_table_names(schema=schema)  # type: ignore[arg-type]
-        except Exception:
-            table_names = inspector.get_table_names()
-        for table_name in table_names:
-            # Reflect table once for Core-based sampling
-            try:
-                table_obj = sa.Table(table_name, metadata, autoload_with=engine, schema=schema)
-            except Exception:
-                table_obj = None
-
-            for col in inspector.get_columns(table_name, schema=schema):
-                # Skip vector or unknown vector-like columns
-                col_type_str = str(col.get('type', '')).lower()
-                if 'vector' in col_type_str:
-                    continue
-
-                record: Dict[str, Any] = {
-                    "schema": schema or "",
-                    "table": table_name,
-                    "column": col["name"],
-                    "type": str(col["type"]),
-                    "category": _classify(col["type"]),
-                }
-
-                if sample_rows > 0 and table_obj is not None:
+            with engine.connect() as conn:
+                for rec in meta:
+                    s = rec["schema"]
+                    t = rec["table"]
+                    c = rec["column"]
+                    full_name = f"{_quote_ident(s)}.{_quote_ident(t)}" if s else _quote_ident(t)
+                    col_name  = _quote_ident(c)
                     try:
-                        col_name = col["name"]
-                        if col_name in table_obj.c:  # type: ignore[operator]
-                            stmt = sa.select(table_obj.c[col_name]).limit(sample_rows)
-                            with engine.connect() as conn:
-                                rows = conn.execute(stmt).scalars().all()
-                            record["sample"] = rows
-                        else:
-                            record["sample"] = []
+                        stmt = sa.text(f"SELECT {col_name} FROM {full_name} LIMIT :lim")
+                        vals = conn.execute(stmt, {"lim": sample_rows}).scalars().all()
+                        rec["sample"] = vals
                     except Exception:
-                        record["sample"] = []  # best-effort only
-
-                meta.append(record)
+                        rec["sample"] = []
+        except Exception:
+            # Sampling is optional; ignore errors globally
+            pass
 
     return meta
+
+
+def get_metadata(engine: sa.Engine, sample_rows: int = 0) -> List[Dict[str, Any]]:
+    """Return a list of dicts describing every column (PostgreSQL only).
+
+    Uses pg_catalog for a single-query fast-path. This module targets PostgreSQL
+    exclusively; other dialects are not supported.
+    """
+    if not engine.dialect.name.startswith("postgres"):
+        raise RuntimeError("PostgreSQL required: dialect is '%s'" % engine.dialect.name)
+    return _get_metadata_pg_fast(engine, sample_rows=sample_rows)
 
 
 if __name__ == "__main__":

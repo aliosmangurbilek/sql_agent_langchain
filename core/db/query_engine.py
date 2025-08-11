@@ -1,4 +1,4 @@
-"""core.db.query_engine
+""""core.db.query_engine
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 LangChain tabanlı tam yetenekli bir SQL ajanı.
@@ -11,9 +11,10 @@ olduğunda tablolari listeler, şemayı sorar ve sorguyu çalıştırır.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List, Set
 
 import os
+import re
 import sqlalchemy as sa
 from langchain_openai import ChatOpenAI
 from langchain_community.utilities.sql_database import SQLDatabase
@@ -24,6 +25,31 @@ from core.db.verify_sql import verify_sql  # SQL guardrail
 from core.db.embedder import DBEmbedder  # Table selection via embeddings
 
 logger = logging.getLogger(__name__)
+
+_VALID_SCHEMA = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _safe_schema(s: str | None) -> str | None:
+    if not s:
+        return None
+    return s if _VALID_SCHEMA.match(s) else None
+
+
+def _hits_to_fqn(hits: List[Dict[str, Any]]) -> tuple[list[str], Set[str]]:
+    """Embedder hitlerinden FQN (schema.table) listesi ve şema kümesi üret."""
+    fqns: list[str] = []
+    schemas: set[str] = set()
+    for h in hits:
+        t = (h.get("table") or "").strip()
+        s = _safe_schema((h.get("schema") or "").strip())
+        if not t or t.startswith("langchain_pg_"):
+            continue
+        q = f"{s}.{t}" if s else t
+        if q not in fqns:
+            fqns.append(q)
+        if s:
+            schemas.add(s)
+    return fqns, schemas
 
 
 class LoggingSQLDatabase(SQLDatabase):
@@ -125,16 +151,10 @@ class QueryEngine:
         # Embedding-based table selector
         self.embedder = DBEmbedder(self.engine)
 
-        self.db = LoggingSQLDatabase(self.engine)
-        toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
-        self.agent = create_sql_agent(
-            llm=self.llm,
-            toolkit=toolkit,
-            verbose=True,
-            agent_executor_kwargs={
-                "handle_parsing_errors": True
-            },
-        )
+        # Varsayılan DB (tüm şema için, kısıtlama yok)
+        self.db = LoggingSQLDatabase(self.engine, sample_rows_in_table_info=2)
+
+    # Kalıcı agent yaratmıyoruz; her çağrıda seçili tablo/şema ile transient agent kuruyoruz.
 
         logger.info(f"Using OpenRouter with model: {llm_model}")
 
@@ -147,9 +167,10 @@ class QueryEngine:
         Embedding ile en alakalı tabloları seçip ajanı sınırlı şema ile koşturur.
         """
         # 1) Relevant tables via embeddings (best-effort)
-        db_for_run: LoggingSQLDatabase
+        db_for_run: LoggingSQLDatabase = self.db
         try:
             hits = self.embedder.similarity_search(nl_query, k=6)
+
             # Log embedding hits for observability
             try:
                 hit_summ = [
@@ -159,20 +180,37 @@ class QueryEngine:
                 logger.info("Embedding hits: %s", ", ".join(hit_summ))
             except Exception:
                 logger.debug("Could not log embedding hits; continuing.")
-            tables = []
-            for h in hits:
-                t = h.get("table")
-                if not t:
-                    continue
-                s = (h.get("schema") or "").strip()
-                qualified = f"{s}.{t}" if s else t
-                if qualified not in tables:
-                    tables.append(qualified)
-            if tables:
-                logger.info("Restricting agent to tables: %s", ", ".join(tables))
-                db_for_run = LoggingSQLDatabase(self.engine, include_tables=tables)
+
+            # FQN + şema kümesi
+            fqns, schemas = _hits_to_fqn(hits)
+
+            if fqns:
+                # Önce FQN ile dene (şema problemi yaşamaz)
+                logger.info("Restricting agent to tables: %s", ", ".join(fqns))
+                try:
+                    db_for_run = LoggingSQLDatabase(
+                        self.engine,
+                        include_tables=fqns,
+                        sample_rows_in_table_info=2,
+                    )
+                except Exception as e_fqn:
+                    logger.warning(f"FQN include_tables failed; will try schema fallback. Reason: {e_fqn}")
+                    # Tek şema varsa schema-param ile unqualified deneyelim
+                    if len(schemas) == 1:
+                        sch = next(iter(schemas))
+                        unq = [t.split(".", 1)[-1] for t in fqns]
+                        db_for_run = LoggingSQLDatabase(
+                            self.engine,
+                            schema=sch,
+                            include_tables=unq,
+                            sample_rows_in_table_info=2,
+                        )
+                    else:
+                        # Çoklu şema ve FQN başarısızsa, geniş DB'ye düş
+                        db_for_run = self.db
             else:
                 db_for_run = self.db
+
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Embedding-based table selection failed, falling back. Reason: {e}")
             db_for_run = self.db
@@ -183,18 +221,40 @@ class QueryEngine:
             llm=self.llm,
             toolkit=toolkit,
             verbose=True,
-            agent_executor_kwargs={
-                "handle_parsing_errors": True
-            },
+            agent_executor_kwargs={"handle_parsing_errors": True},
         )
 
-        # 3) Invoke and return
+        # 3) Invoke agent
         result = agent.invoke({"input": nl_query})
         answer = result.get("output", "") if isinstance(result, dict) else str(result)
 
+        # 4) Ensure we have SQL + data for downstream charting
+        sql_str = getattr(db_for_run, "last_query", "")
+        data_rows = getattr(db_for_run, "last_result", [])
+
+        if not sql_str or not isinstance(data_rows, list) or len(data_rows) == 0:
+            # Fallback: ask LLM to emit only SQL, then verify and execute
+            try:
+                logger.info("Agent produced no tool output; attempting SQL-only fallback…")
+                sql_only_prompt = (
+                    "Return ONLY a valid SQL query that answers the question for this database. "
+                    "Do not include explanations or backticks. Question: " + nl_query
+                )
+                sql_resp = self.llm.invoke(sql_only_prompt)
+                raw_sql = getattr(sql_resp, "content", None) or str(sql_resp)
+                raw_sql = raw_sql.strip()
+                safe_sql = verify_sql(raw_sql, engine=self.engine, auto_limit=True, cost_guard=False)
+                # Execute to populate last_query/last_result
+                _ = db_for_run.run(safe_sql, fetch="all")
+                sql_str = getattr(db_for_run, "last_query", str(safe_sql))
+                data_rows = getattr(db_for_run, "last_result", [])
+                if not answer:
+                    answer = "Executed fallback SQL."
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"SQL-only fallback failed: {e}")
+
         return {
             "answer": answer,
-            "sql": getattr(db_for_run, "last_query", ""),
-            "data": getattr(db_for_run, "last_result", []),
+            "sql": sql_str,
+            "data": data_rows,
         }
-
