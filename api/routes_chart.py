@@ -38,7 +38,7 @@ bp = Blueprint("chart", __name__, url_prefix="/api")
 
 
 @lru_cache(maxsize=16)
-def _get_engine(db_uri: str, llm_model: str = "openai/gpt-4o-mini") -> QueryEngine:
+def _get_engine(db_uri: str, llm_model: str = "deepseek/deepseek-chat") -> QueryEngine:
     # Her db_uri ve llm_model kombinasyonu için bir kere QueryEngine oluştur
     # Bu sayede aynı veritabanı için birden fazla kez embedding yapmayız
     return QueryEngine(db_uri, llm_model=llm_model)
@@ -58,7 +58,7 @@ def run_chart():
     body = request.get_json(silent=True) or {}
     db_uri = body.get("db_uri")
     question = body.get("question")
-    model = body.get("model", "openai/gpt-4o-mini")
+    model = body.get("model", "deepseek/deepseek-chat")
 
     if not db_uri or not question:
         raise BadRequest("Both 'db_uri' and 'question' fields are required")
