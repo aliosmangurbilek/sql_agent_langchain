@@ -177,3 +177,4 @@ if __name__ == "__main__":
     print(f"Columns total: {len(meta)}")
     print("Sample (limited):")
     print(json.dumps(meta[: args.limit], indent=2))
+
