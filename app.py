@@ -13,6 +13,7 @@ from api.routes_query import bp as query_bp
 from api.routes_chart import bp as chart_bp
 from api.routes_health import bp as health_bp
 from api.routes_models import bp as models_bp
+from api.routes_admin import bp as admin_bp
 from config import AppConfig
 
 def create_app() -> Flask:
@@ -35,6 +36,7 @@ def create_app() -> Flask:
     app.register_blueprint(chart_bp)
     app.register_blueprint(health_bp, url_prefix='/api')
     app.register_blueprint(models_bp)
+    app.register_blueprint(admin_bp)
 
     # Main route for the web interface
     @app.route('/')
