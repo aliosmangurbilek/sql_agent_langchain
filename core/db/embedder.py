@@ -232,6 +232,30 @@ class DBEmbedder:
         self._build_store()
 
     # ------------------------------------------------------------------ #
+    # Minimal deterministic schema signature (simplified phase 1)         #
+    # ------------------------------------------------------------------ #
+    _META_TABLE_NAME = "app_schema_embed_meta"
+
+    def _schema_signature(self) -> str:
+        """Return stable SHA256 hash of (schema, table, column, type) excluding internal tables.
+
+        Internal tables (langchain_pg_* and meta table) are ignored so they don't create false diffs.
+        Signature is only persisted after a successful rebuild; 'check' endpoint compares live vs stored.
+        """
+        if not self.engine.url.get_backend_name().startswith("postgres"):
+            return ""
+        meta = get_metadata(self.engine)
+        rows = []
+        for r in meta:
+            tbl = r["table"]
+            if tbl == self._META_TABLE_NAME or tbl.startswith("langchain_pg_"):
+                continue
+            rows.append((r.get("schema") or "", tbl, r["column"], str(r["type"]).lower()))
+        rows.sort()
+        payload = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    # ------------------------------------------------------------------ #
     # Index management
     # ------------------------------------------------------------------ #
 

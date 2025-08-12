@@ -17,6 +17,13 @@
         </header>
 
         <main>
+            <div id="schema-banner" class="schema-banner hidden">
+                <span id="schema-banner-text">Schema status unknown</span>
+                <div class="schema-banner-actions">
+                    <button id="btn-check-schema" class="btn btn-secondary btn-small" title="Compute live schema hash and flag if changed">Check Schema</button>
+                    <button id="btn-rebuild-embeddings" class="btn btn-primary btn-small" title="Rebuild schema embeddings" disabled>Rebuild Embeddings</button>
+                </div>
+            </div>
             <section class="config-section">
                 <h2>Configuration</h2>
                 <div class="input-group">
