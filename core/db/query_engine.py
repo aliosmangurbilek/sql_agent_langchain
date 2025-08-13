@@ -185,29 +185,35 @@ class QueryEngine:
             fqns, schemas = _hits_to_fqn(hits)
 
             if fqns:
-                # Önce FQN ile dene (şema problemi yaşamaz)
-                logger.info("Restricting agent to tables: %s", ", ".join(fqns))
-                try:
+                # LangChain SQLDatabase include_tables param'ı şema nitelikli isim (schema.table) değil sadece tablo adı bekler.
+                # Bu nedenle önce hit'leri şemaya göre gruplayıp güvenli strateji seçiyoruz.
+                schema_table_map: dict[str | None, list[str]] = {}
+                for f in fqns:
+                    if "." in f:
+                        sch, tbl = f.split(".", 1)
+                    else:
+                        sch, tbl = None, f
+                    schema_table_map.setdefault(sch, []).append(tbl)
+
+                if len(schema_table_map) == 1:
+                    # Tek şema (veya None): direkt kısıtlı DB oluştur
+                    only_schema, tables = next(iter(schema_table_map.items()))
+                    log_list = [f"{only_schema+'.' if only_schema else ''}{t}" for t in tables]
+                    logger.info("Restricting agent to tables (schema-aware): %s", ", ".join(log_list))
                     db_for_run = LoggingSQLDatabase(
                         self.engine,
-                        include_tables=fqns,
+                        schema=only_schema,  # None ise varsayılan search_path
+                        include_tables=tables,
                         sample_rows_in_table_info=2,
                     )
-                except Exception as e_fqn:
-                    logger.warning(f"FQN include_tables failed; will try schema fallback. Reason: {e_fqn}")
-                    # Tek şema varsa schema-param ile unqualified deneyelim
-                    if len(schemas) == 1:
-                        sch = next(iter(schemas))
-                        unq = [t.split(".", 1)[-1] for t in fqns]
-                        db_for_run = LoggingSQLDatabase(
-                            self.engine,
-                            schema=sch,
-                            include_tables=unq,
-                            sample_rows_in_table_info=2,
-                        )
-                    else:
-                        # Çoklu şema ve FQN başarısızsa, geniş DB'ye düş
-                        db_for_run = self.db
+                else:
+                    # Çoklu şema senaryosu: SQLDatabase aynı anda birden fazla şemayı include_tables ile daraltamıyor.
+                    # Bu durumda fail-open yerine ileride özel filtre için not bırak.
+                    logger.info(
+                        "Multiple schemas in embedding hits (%s); skipping hard restriction (using full DB).",
+                        ", ".join(fqns),
+                    )
+                    db_for_run = self.db
             else:
                 db_for_run = self.db
 

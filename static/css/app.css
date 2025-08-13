@@ -489,6 +489,13 @@ code {
     display: inline-block;
 }
 
+/* Toolbar additions */
+.toolbar { display:flex; justify-content:space-between; align-items:center; gap:.75rem; margin-bottom:.75rem; flex-wrap:wrap; }
+.toolbar .left { display:flex; gap:.5rem; flex-wrap:wrap; }
+#result-meta { font-size:.7rem; opacity:.75; }
+.chart-info { font-size:.75rem; margin-bottom:.5rem; color:#555; }
+.btn-small { padding:.35rem .55rem; font-size:.7rem; }
+
 .connection-status .loading {
     color: #856404;
     background-color: #fff3cd;

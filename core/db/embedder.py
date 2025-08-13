@@ -235,24 +235,34 @@ class DBEmbedder:
     # Minimal deterministic schema signature (simplified phase 1)         #
     # ------------------------------------------------------------------ #
     _META_TABLE_NAME = "app_schema_embed_meta"
+    # Backward compat: some code references _SIG_META_TABLE
+    _SIG_META_TABLE = _META_TABLE_NAME
 
-    def _schema_signature(self) -> str:
-        """Return stable SHA256 hash of (schema, table, column, type) excluding internal tables.
+    def _schema_components(self) -> list[tuple[str, str, str, str]]:  # (schema, table, column, type)
+        """Deterministic component list used for signature & optional diff UI.
 
-        Internal tables (langchain_pg_* and meta table) are ignored so they don't create false diffs.
-        Signature is only persisted after a successful rebuild; 'check' endpoint compares live vs stored.
+        Filters out internal langchain_pg_* ve meta tablo.
         """
         if not self.engine.url.get_backend_name().startswith("postgres"):
+            return []
+        out: list[tuple[str, str, str, str]] = []
+        try:
+            for r in get_metadata(self.engine):
+                tbl = r["table"]
+                if tbl == self._META_TABLE_NAME or tbl.startswith("langchain_pg_"):
+                    continue
+                out.append(((r.get("schema") or ""), tbl, r["column"], str(r["type"]).lower()))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("_schema_components failed: %s", e)
+        out.sort()
+        return out
+
+    def _schema_signature(self) -> str:
+        """Stable SHA256 hash of schema components list."""
+        comps = self._schema_components()
+        if not comps:
             return ""
-        meta = get_metadata(self.engine)
-        rows = []
-        for r in meta:
-            tbl = r["table"]
-            if tbl == self._META_TABLE_NAME or tbl.startswith("langchain_pg_"):
-                continue
-            rows.append((r.get("schema") or "", tbl, r["column"], str(r["type"]).lower()))
-        rows.sort()
-        payload = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+        payload = json.dumps(comps, ensure_ascii=False, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     # ------------------------------------------------------------------ #
