@@ -12,35 +12,16 @@ Heuristikler
 3. Yalnızca iki sayısal alan → Scatter plot
 4. Diğer durumlar → Tablo (arkaplanda bar gömme)
 
-`use_llm=True` parametresi verilirse (varsayılan **False** ve ortamda
-OPENAI_API_KEY varsa) heuristik çıktıyı prompt'layarak ChatGPT'den
-iyileştirilmiş spec alınır. OPENAI_API_KEY ortam değişkeni ayarlıysa,
-OpenAI API ile daha iyi grafik spec'i üretmek için LLM kullanılır.
-
-Kullanım:
----------
-generate_chart_spec(..., use_llm=False) # Sadece heuristik (varsayılan)
-generate_chart_spec(..., use_llm=True)  # OpenAI API key ile LLM destekli
+Sadece heuristik yaklaşım kullanılır; OpenAI bağımlılığı kaldırıldı.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
-
-# İsteğe bağlı LLM
-try:
-    from langchain_openai import ChatOpenAI
-
-    _OPENAI_READY = bool(os.getenv("OPENAI_API_KEY"))
-except ModuleNotFoundError:  # langchain kurulu değilse
-    ChatOpenAI = None  # type: ignore
-    _OPENAI_READY = False
-
 
 # ------------------------------------------------------------------ #
 # Public API
@@ -52,42 +33,28 @@ def generate_chart_spec(
     sql: str,
     data: List[Dict[str, Any]],
     *,
-    use_llm: bool = False,
+    use_llm: bool = False,  # kept for API compatibility, ignored
 ) -> Dict[str, Any]:
-    """
-    Heuristik (ve isteğe bağlı LLM) tabanlı Vega-Lite spec üret.
+    """Heuristik + hafif NLP ile Vega-Lite spec üret (A+B+C geliştirmeleri).
 
-    Parameters
-    ----------
-    question : str
-        Kullanıcının doğal dil sorgusu (grafik başlığı için).
-    sql : str
-        Çalıştırılan SQL (tool-tip için).
-    data : list[dict]
-        QueryEngine'den gelen satırlar (ilk ~100 satır yeter).
-    use_llm : bool, default False
-        True ise OpenAI modeliyle heuristik spec'i iyileştir.
-
-    Returns
-    -------
-    dict
-        Vega-Lite 5 JSON spec (frontend `vega.embed()` ile çizilebilir).
+    İyileştirmeler:
+    - (A) İlk N satır (varsayılan 50) üzerinden tip & kardinalite analizi.
+    - (A) Aşırı yüksek kardinalite nominal alanlarda top-N (default 15) kırpma / bar yerine tablo.
+    - (B) Nominal + numerik seçildiğinde yinelenen kategorileri aggregate (sum) ile topla.
+    - (C) Soru ipuçları (trend, top, dağılım) ile chart tipi override.
+    - Çok küçük veri seti (<=10 satır) için hata fırlat (kullanıcıya daha anlamlı veri üretmesi istenir).
     """
     if not data:
         return _empty_spec("No data returned", question)
 
-    field_types = _infer_field_types(data)
-    chart_type, enc = _choose_chart(field_types, data)
-    spec = _build_spec(chart_type, enc, question, sql, data)
+    row_count = len(data)
+    if row_count <= 9:  # Kullanıcı isteği: 10 satır civarı sonuçta hata ver
+        raise ValueError(f"Result set too small for chart (rows={row_count}). Provide a broader query.")
 
-    # İsteğe bağlı LLM post-processing
-    if use_llm and _OPENAI_READY:
-        try:
-            spec = _llm_refine_spec(spec, question)
-        except Exception:  # noqa: BLE001
-            # LLM başarısızsa heuristik spec ile devam
-            pass
-
+    sample = data[:50]
+    analysis = _analyze_fields(sample)
+    chart_type, enc, opts = _choose_chart(question, analysis, sample)
+    spec = _build_spec(chart_type, enc, question, sql, analysis, opts)
     return spec
 
 
@@ -96,101 +63,132 @@ def generate_chart_spec(
 # ------------------------------------------------------------------ #
 
 
-def _infer_field_types(rows: List[Dict[str, Any]]) -> Dict[str, str]:
-    """
-    Kolon adlarından & ilk satırlardan tip tahmini.
+def _analyze_fields(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Çok satırlı örnek üzerinden alan analizi.
 
-    Returns
-    -------
-    {field_name: "quantitative"|"temporal"|"nominal"}
+    Dönen yapı:
+      {
+        'types': {field: type},
+        'cardinality': {field: distinct_count},
+        'null_ratio': {field: 0..1},
+        'numeric_variance': {field: var},
+      }
     """
     if not rows:
-        return {}
+        return {"types": {}, "cardinality": {}, "null_ratio": {}, "numeric_variance": {}}
 
-    sample = rows[0]
     types: Dict[str, str] = {}
-    for col, val in sample.items():
-        # Check if field has non-null values across multiple rows
-        non_null_values = [
-            row.get(col)
-            for row in rows[: min(10, len(rows))]
-            if row.get(col) is not None
-        ]
+    cardinality: Dict[str, int] = {}
+    null_ratio: Dict[str, float] = {}
+    numeric_variance: Dict[str, float] = {}
 
-        if not non_null_values:
-            types[col] = "nominal"  # Default for empty/null fields
-            continue
+    fields = list(rows[0].keys())
+    import collections, math
+    values_by_field: Dict[str, list] = {f: [] for f in fields}
+    for r in rows:
+        for f in fields:
+            values_by_field[f].append(r.get(f))
 
-        # Use first non-null value for type inference
-        sample_val = non_null_values[0]
-
-        if _looks_temporal(col, sample_val):
-            types[col] = "temporal"
-        elif _is_numeric(sample_val):
-            types[col] = "quantitative"
+    for f, vals in values_by_field.items():
+        non_null = [v for v in vals if v is not None]
+        null_ratio[f] = 1 - (len(non_null) / max(1, len(vals)))
+        sample_val = next((v for v in non_null if v is not None), None)
+        if sample_val is not None and _looks_temporal(f, sample_val):
+            types[f] = "temporal"
+        elif all(_is_numeric(v) for v in non_null[: min(5, len(non_null))]) and sum(
+            1 for v in non_null if _is_numeric(v)
+        ) >= max(1, int(0.7 * len(non_null))):
+            types[f] = "quantitative"
         else:
-            types[col] = "nominal"
-    return types
+            types[f] = "nominal"
+        cardinality[f] = len({v for v in non_null})
+        if types[f] == "quantitative":
+            nums = [float(v) for v in non_null if _is_numeric(v)]
+            if len(nums) >= 2:
+                m = sum(nums) / len(nums)
+                numeric_variance[f] = sum((x - m) ** 2 for x in nums) / (len(nums) - 1)
+            else:
+                numeric_variance[f] = 0.0
+    return {
+        "types": types,
+        "cardinality": cardinality,
+        "null_ratio": null_ratio,
+        "numeric_variance": numeric_variance,
+    }
 
 
-def _choose_chart(
-    field_types: Dict[str, str], rows: List[Dict[str, Any]]
-) -> Tuple[str, Dict[str, Any]]:
+def _choose_chart(question: str, analysis: Dict[str, Any], rows: List[Dict[str, Any]]) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
+    """Chart seçimi + encoding + ops.
+
+    Ek dönen ops:
+      {
+        'aggregate': bool,
+        'top_n': int|None,
+      }
     """
-    Basit kurallara göre chart tipi & encoding seç.
-    Returns
-    -------
-    ("line"|"bar"|"point"|"table", encoding_dict)
-    """
+    field_types = analysis["types"]
     temporal = [f for f, t in field_types.items() if t == "temporal"]
     quantitative = [f for f, t in field_types.items() if t == "quantitative"]
     nominal = [f for f, t in field_types.items() if t == "nominal"]
 
+    # Rank fields
     if temporal:
         temporal = _rank_temporal_fields(rows, temporal)
     if quantitative:
-        quantitative = _rank_numeric_fields(rows, quantitative)
+        quantitative = sorted(quantitative, key=lambda f: analysis["numeric_variance"].get(f, 0), reverse=True)
     if nominal:
         nominal = _rank_nominal_fields(rows, nominal)
 
+    q_low = question.lower()
+    cue_trend = any(k in q_low for k in ["trend", "zaman", "timeline", "ay", "month", "hafta", "week", "gün", "daily"])
+    cue_scatter = any(k in q_low for k in ["scatter", "dağılım", "distribution"])
+    cue_top = any(k in q_low for k in ["top", "en fazla", "en çok", "highest", "largest", "max"])
+
+    opts = {"aggregate": False, "top_n": None}
+
+    if cue_scatter and len(quantitative) >= 2:
+        return "point", {"x": quantitative[0], "y": quantitative[1]}, opts
+
+    if (cue_trend or cue_top) and temporal and quantitative:
+        return "line", {"x": temporal[0], "y": quantitative[0]}, opts
+
     if temporal and quantitative:
-        x = temporal[0]
-        y = quantitative[0]
-        return "line", {"x": x, "y": y}
+        return "line", {"x": temporal[0], "y": quantitative[0]}, opts
+
     if nominal and quantitative:
-        x = nominal[0]
-        y = quantitative[0]
-        return "bar", {"x": x, "y": y}
+        # High cardinality handling
+        card = analysis["cardinality"].get(nominal[0], 0)
+        if card > 60:
+            # Too many categories – revert to table
+            return "table", {"columns": list(field_types.keys())[:6]}, opts
+        if card > 20:
+            opts["top_n"] = 15
+        opts["aggregate"] = True  # aggregate repeating categories
+        return "bar", {"x": nominal[0], "y": quantitative[0]}, opts
+
     if len(quantitative) >= 2:
-        return "point", {"x": quantitative[0], "y": quantitative[1]}
-    # fallback – tablo
-    return "table", {"columns": list(field_types.keys())}
+        return "point", {"x": quantitative[0], "y": quantitative[1]}, opts
+
+    return "table", {"columns": list(field_types.keys())[:6]}, opts
 
 
 def _rank_numeric_fields(rows: List[Dict[str, Any]], fields: List[str]) -> List[str]:
     variances = {}
     for f in fields:
-        vals = [
-            row[f]
-            for row in rows
-            if row.get(f) is not None and isinstance(row.get(f), (int, float))
-        ]
-        if len(vals) > 1:
-            variances[f] = float(np.var(vals))
-        else:
-            variances[f] = 0.0
+        vals = [row[f] for row in rows if isinstance(row.get(f), (int, float))]
+        variances[f] = float(np.var(vals)) if vals else 0.0
     return sorted(fields, key=lambda x: variances[x], reverse=True)
 
 
 def _rank_nominal_fields(rows: List[Dict[str, Any]], fields: List[str]) -> List[str]:
     counts = {}
     for f in fields:
-        unique_vals = {row[f] for row in rows if f in row and row[f] is not None}
-        counts[f] = len(unique_vals)
+        counts[f] = len({row[f] for row in rows if f in row})
     return sorted(fields, key=lambda x: counts[x], reverse=True)
 
 
 def _rank_temporal_fields(rows: List[Dict[str, Any]], fields: List[str]) -> List[str]:
+    import numpy as _np
     ranges = {}
     for f in fields:
         vals = []
@@ -199,56 +197,43 @@ def _rank_temporal_fields(rows: List[Dict[str, Any]], fields: List[str]) -> List
             if v is None:
                 continue
             try:
-                vals.append(np.datetime64(v))
+                vals.append(_np.datetime64(v))
             except Exception:
                 pass
-        if len(vals) > 1:
-            ranges[f] = float(
-                (max(vals) - min(vals)).astype("timedelta64[s]")
-                / np.timedelta64(1, "s")
-            )
+        if vals:
+            ranges[f] = float((max(vals) - min(vals)).astype('timedelta64[s]') / _np.timedelta64(1, 's'))
         else:
             ranges[f] = 0.0
     return sorted(fields, key=lambda x: ranges[x], reverse=True)
 
 
-def _build_spec(
-    chart: str, enc: Dict[str, Any], title: str, sql: str, data: List[Dict[str, Any]]
-) -> Dict[str, Any]:
+def _build_spec(chart: str, enc: Dict[str, Any], title: str, sql: str, analysis: Dict[str, Any], opts: Dict[str, Any]) -> Dict[str, Any]:
     """Vega-Lite spec üret."""
     if chart == "table":
-        # Create a proper table visualization using concatenated text marks
-        columns = enc["columns"][:5]  # Limit to first 5 columns to avoid clutter
-
+        # Simple bar-wrapped table
         return {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
             "description": title,
-            "data": {"values": data},
-            "mark": {"type": "rect", "stroke": "#ccc", "strokeWidth": 1},
+            "data": {"name": "table"},  # front-end inline_data embed edecek
+            "mark": "text",
             "encoding": {
-                "x": {
-                    "field": columns[0],
-                    "type": "nominal",
-                    "axis": {"title": columns[0]},
-                },
-                "y": {
-                    "field": columns[1] if len(columns) > 1 else columns[0],
-                    "type": "nominal",
-                    "axis": {"title": columns[1] if len(columns) > 1 else columns[0]},
-                },
-                "color": {"value": "#f0f0f0"},
-                "tooltip": [{"field": col, "type": "nominal"} for col in columns],
+                "row": {"field": enc["columns"][0], "type": "nominal"},
+                "column": {"field": enc["columns"][1], "type": "nominal"}
+                if len(enc["columns"]) > 1
+                else {"value": ""},
+                "text": {"field": enc["columns"][0], "type": "nominal"},
             },
+            "config": {"view": {"stroke": "transparent"}},
             "title": title,
             "usermeta": {"sql": sql},
         }
 
     # XY charts
     mark = {"line": "line", "bar": "bar", "point": "point"}[chart]
-    return {
+    spec: Dict[str, Any] = {
         "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
         "description": title,
-        "data": {"values": data},
+        "data": {"name": "table"},
         "mark": mark,
         "encoding": {
             "x": {"field": enc["x"], "type": _vl_type(enc["x"], chart)},
@@ -261,36 +246,30 @@ def _build_spec(
         "title": title,
         "usermeta": {"sql": sql},
     }
-
-
-# ------------------------------------------------------------------ #
-# LLM refinement (isteğe bağlı)
-# ------------------------------------------------------------------ #
-
-
-def _llm_refine_spec(spec: Dict[str, Any], question: str) -> Dict[str, Any]:
-    """OpenAI ile heuristik spec'i iyileştir (ör. renk, sorting, axis)."""
-    if ChatOpenAI is None:
-        return spec
-    llm = ChatOpenAI(temperature=0.0, model="gpt-4o-mini-2024-07-18")
-
-    system = (
-        "You are a data visualisation expert. "
-        "Given a draft Vega-Lite spec and the user's question, "
-        "return an improved Vega-Lite v5 JSON. "
-        "If the draft is already ok, just return it unchanged."
-    )
-    user = (
-        f"User question:\n{question}\n\n"
-        f"Draft spec JSON:\n{json.dumps(spec, indent=2)}"
-    )
-    resp = llm([("system", system), ("user", user)])
-    try:
-        refined = json.loads(resp[0].content.strip("```json").strip())
-        return refined
-    except json.JSONDecodeError:
-        # LLM çıktısı parse edilemediyse orijinali koru
-        return spec
+    enc_y = spec["encoding"]["y"]
+    if opts.get("aggregate"):
+        enc_y["aggregate"] = "sum"
+    # Top-N filtering transform (descending by y after aggregate if aggregate applied)
+    if opts.get("top_n"):
+        topn = opts["top_n"]
+        spec.setdefault("transform", [])
+        if opts.get("aggregate"):
+            # aggregate then window + filter
+            # Vega-Lite auto aggregate via encoding.aggregate; we emulate ranking after aggregation
+            spec["transform"].extend([
+                {"window": [{"op": "row_number", "as": "__rn"}], "sort": [{"field": enc["y"], "order": "descending"}]},
+                {"filter": f"datum.__rn <= {topn}"},
+            ])
+        else:
+            spec["transform"].extend([
+                {"aggregate": [{"op": "sum", "field": enc["y"], "as": "__agg_y"}], "groupby": [enc["x"]]},
+                {"window": [{"op": "row_number", "as": "__rn"}], "sort": [{"field": "__agg_y", "order": "descending"}]},
+                {"filter": f"datum.__rn <= {topn}"},
+            ])
+            spec["encoding"]["y"]["field"] = "__agg_y"
+            spec["encoding"]["y"].pop("aggregate", None)
+            spec["encoding"]["tooltip"].append({"field": "__agg_y", "type": "quantitative", "title": "Sum"})
+    return spec
 
 
 # ------------------------------------------------------------------ #
@@ -300,18 +279,24 @@ def _llm_refine_spec(spec: Dict[str, Any], question: str) -> Dict[str, Any]:
 
 def _looks_temporal(col: str, val: Any) -> bool:
     pat = re.compile(r"(date|time|year|month)", re.I)
-    return bool(pat.search(col)) or isinstance(val, (np.datetime64,))  # noqa: E721
+    try:
+        import numpy as _np
+        return bool(pat.search(col)) or isinstance(val, (_np.datetime64,))  # noqa: E721
+    except Exception:
+        return bool(pat.search(col))
 
 
 def _is_numeric(val: Any) -> bool:
-    return isinstance(val, (int, float, np.number))
+    try:
+        import numpy as _np
+        return isinstance(val, (int, float, _np.number))
+    except Exception:
+        return isinstance(val, (int, float))
 
 
 def _vl_type(field: str, chart: str) -> str:
     """Vega-Lite tip kestirimi (temporal veya nominal)."""
-    return (
-        "temporal" if re.search(r"(date|time|year|month)", field, re.I) else "nominal"
-    )
+    return "temporal" if re.search(r"(date|time|year|month)", field, re.I) else "nominal"
 
 
 def _empty_spec(msg: str, title: str) -> Dict[str, Any]:

@@ -2,7 +2,6 @@
 flask
 gunicorn
 gevent
-fastapi
 
 # LangChain and AI dependencies
 langchain
@@ -15,9 +14,10 @@ sqlalchemy
 sqlglot
 psycopg2-binary
 pgvector
-asyncpg
-scann
+
+# Vector stores
 sentence-transformers
+
 # Configuration and utilities
 pydantic
 pydantic-settings
@@ -27,6 +27,7 @@ requests
 # Chart and data visualization dependencies
 vega-datasets
 pandas
+numpy
 
 # Development and testing
 pytest

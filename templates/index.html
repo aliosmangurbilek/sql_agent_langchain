@@ -14,90 +14,20 @@
         <header>
             <h1>🤖 LangChain SQL Agent</h1>
             <p>Natural language to SQL queries with interactive charts</p>
-            <button id="theme-toggle" class="btn btn-secondary theme-toggle">🌙 Dark Mode</button>
         </header>
 
         <main>
-            <!-- Schema Change Notifications -->
-            <section id="notification-section" class="notification-section" style="display: none;">
-                <div id="notification-container" class="notification-container">
-                    <!-- Notifications will be added here dynamically -->
+            <div id="schema-banner" class="schema-banner hidden">
+                <span id="schema-banner-text">Schema status unknown</span>
+                <div class="schema-banner-actions">
+                    <button id="btn-check-schema" class="btn btn-secondary btn-small" title="Compute live schema hash and flag if changed">Check Schema</button>
+                    <button id="btn-rebuild-embeddings" class="btn btn-primary btn-small" title="Rebuild schema embeddings" disabled>Rebuild Embeddings</button>
                 </div>
-            </section>
-
-            <!-- Worker Status Panel -->
-            <section class="worker-status-section">
-                <h2>🔧 Schema Worker Status</h2>
-                <div class="status-grid">
-                    <div class="status-card worker-card">
-                        <div class="status-header">
-                            <span class="status-label">Worker</span>
-                            <span id="worker-status" class="status-indicator offline">●</span>
-                        </div>
-                        <div class="status-content">
-                            <span id="worker-status-text">Checking...</span>
-                        </div>
-                    </div>
-                    <div class="status-card active-db-card">
-                        <div class="status-header">
-                            <span class="status-label">Active DB</span>
-                            <button id="refresh-status-btn" class="btn btn-mini">🔄</button>
-                        </div>
-                        <div class="status-content">
-                            <span id="active-db-name">None</span>
-                        </div>
-                    </div>
-                    <div class="status-card cached-dbs-card">
-                        <div class="status-header">
-                            <span class="status-label">Cached DBs</span>
-                            <span id="cached-db-count" class="badge">0</span>
-                        </div>
-                        <div class="status-content">
-                            <div id="cached-db-list">No cached connections</div>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Database Management Section -->
-            <section class="database-section">
-                <h2>🗄️ Database Management</h2>
-                <div class="database-controls">
-                    <div class="input-group">
-                        <label for="base-db-uri">Base Database URL:</label>
-                        <div class="input-row">
-                            <input type="text" id="base-db-uri" placeholder="postgresql+asyncpg://user:pass@localhost/" value="">
-                            <button id="save-base-uri-btn" class="btn btn-secondary">Save</button>
-                        </div>
-                    </div>
-                    
-                    <div class="input-group">
-                        <label for="database-switcher">Switch Active Database:</label>
-                        <div class="input-row">
-                            <input type="text" id="database-switcher" placeholder="database_name" value="">
-                            <button id="switch-db-btn" class="btn btn-primary">Switch DB</button>
-                        </div>
-                    </div>
-
-                    <div class="input-group">
-                        <label>Manual Embedding Refresh:</label>
-                        <div class="embedding-controls">
-                            <div class="input-row">
-                                <input type="text" id="refresh-schema" placeholder="schema_name (optional)" value="">
-                                <input type="text" id="refresh-table" placeholder="table_name (optional)" value="">
-                                <button id="refresh-embeddings-btn" class="btn btn-warning">🔄 Refresh Embeddings</button>
-                            </div>
-                            <small class="help-text">Leave fields empty to refresh all embeddings for the active database</small>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Traditional Configuration Section -->
+            </div>
             <section class="config-section">
-                <h2>⚙️ Query Configuration</h2>
+                <h2>Configuration</h2>
                 <div class="input-group">
-                    <label for="db-uri">Current Database URI:</label>
+                    <label for="db-uri">Database URI:</label>
                     <div class="input-row">
                         <input type="text" id="db-uri" placeholder="postgresql://user:pass@localhost:5432/db" value="">
                         <button id="test-connection-btn" class="btn btn-test">Test Connection</button>
@@ -122,13 +52,9 @@
                     <textarea id="question" rows="3" placeholder="e.g., Show me the top 10 customers by revenue"></textarea>
                 </div>
 
-                <div class="input-group">
-                    <label><input type="checkbox" id="use-llm"> Enhance charts with LLM</label>
-                </div>
-
                 <div class="button-group">
-                    <button id="run-query" class="btn btn-primary" title="Execute the query and show SQL plus data results">🔍 Fetch Data</button>
-                    <button id="run-chart" class="btn btn-secondary" title="Execute the query and display a chart from the results">📊 Generate Chart</button>
+                    <button id="run-query" class="btn btn-primary">🔍 Run Query</button>
+                    <button id="run-chart" class="btn btn-secondary">📊 Generate Chart</button>
                 </div>
             </section>
 
@@ -137,14 +63,22 @@
                     <button class="tab-btn active" data-tab="sql">SQL Query</button>
                     <button class="tab-btn" data-tab="data">Data Results</button>
                     <button class="tab-btn" data-tab="chart">Chart</button>
-                    <button class="tab-btn" data-tab="schema-log">Schema Log</button>
                 </div>
 
                 <div class="tab-content">
                     <div id="sql-tab" class="tab-pane active">
+                        <div class="toolbar">
+                            <div class="left">
+                                <button id="btn-copy-answer" class="btn btn-small" title="Copy answer">Copy Answer</button>
+                                <button id="btn-copy-sql" class="btn btn-small" title="Copy SQL">Copy SQL</button>
+                                <button id="btn-download-csv" class="btn btn-small" title="Download data as CSV" disabled>Download CSV</button>
+                            </div>
+                            <div class="right" id="result-meta">Rows: 0</div>
+                        </div>
                         <h3>Agent Answer</h3>
+                        <pre><code id="answer-output">No answer yet.</code></pre>
+                        <h3>SQL Query</h3>
                         <pre><code id="sql-output">No query executed yet.</code></pre>
-                        <div id="embedding-suggestions"></div>
                     </div>
 
                     <div id="data-tab" class="tab-pane">
@@ -154,23 +88,8 @@
 
                     <div id="chart-tab" class="tab-pane">
                         <h3>Visualization</h3>
+                        <div id="chart-info" class="chart-info hidden"></div>
                         <div id="chart-output">No chart generated yet.</div>
-                    </div>
-
-                    <div id="schema-log-tab" class="tab-pane">
-                        <h3>📊 Real-time Schema Changes</h3>
-                        <div class="schema-log-controls">
-                            <button id="clear-schema-log" class="btn btn-secondary btn-sm">Clear Log</button>
-                            <button id="toggle-schema-monitoring" class="btn btn-primary btn-sm" data-monitoring="false">Start Monitoring</button>
-                            <button id="refresh-embeddings" class="btn btn-success btn-sm">🔄 Refresh Embeddings</button>
-                            <button id="add-current-db-listener" class="btn btn-info btn-sm">📡 Monitor Current DB</button>
-                        </div>
-                        <div id="schema-log-container" class="schema-log">
-                            <div class="log-entry info">
-                                <span class="timestamp">Ready</span>
-                                <span class="message">Schema change monitoring ready. Use "🔄 Refresh Embeddings" to manually refresh after data changes, or "Start Monitoring" for real-time DDL changes.</span>
-                            </div>
-                        </div>
                     </div>
                 </div>
             </section>
@@ -180,37 +99,11 @@
                     <div class="spinner"></div>
                     <span>Processing...</span>
                 </div>
-                
-                <div id="progress-container" class="progress-container hidden">
-                    <div class="progress-header">
-                        <h4 id="progress-title">Processing your request...</h4>
-                        <span id="progress-percentage">0%</span>
-                    </div>
-                    <div class="progress-bar">
-                        <div id="progress-fill" class="progress-fill"></div>
-                    </div>
-                    <div id="progress-message" class="progress-message">Initializing...</div>
-                    <div id="progress-steps" class="progress-steps"></div>
-                </div>
-                
-                                <div id="error" class="error hidden"></div>
-            </section>
-
-        </main>
-    </div>
-</body>
-</html>
+                <div id="error" class="error hidden"></div>
             </section>
         </main>
     </div>
 
-    <!-- Application JavaScript modules -->
-    <script src="{{ url_for('static', filename='js/ui-utils.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/notification-manager.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/worker-manager.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/schema-logger.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/model-manager.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/config-manager.js') }}"></script>  
-    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

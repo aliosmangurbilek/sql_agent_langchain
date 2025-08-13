@@ -1,600 +1,252 @@
-// Main Application JavaScript - Refactored and Modularized
-// Core functionality and module coordination
+// ------------------------------------------------------------
+// Modular App Script (schema banner logic moved to schema_status.js)
+// ------------------------------------------------------------
 
-// Global module instances
-let workerManager;
-let schemaLogger;
-let modelManager;
-let configManager;
-let notificationManager;
-
-// Global state for caching query results (optimization)
-let lastQueryResult = null;
-let lastQueryQuestion = null;
+import { loadModelsInto } from './modules/models.js';
+import { initSchemaStatus } from './modules/schema_status.js';
 
 // Core DOM elements
+const dbUriInput = document.getElementById('db-uri');
+const modelSelect = document.getElementById('model-select');
 const questionInput = document.getElementById('question');
 const runQueryBtn = document.getElementById('run-query');
 const runChartBtn = document.getElementById('run-chart');
+const answerOutput = document.getElementById('answer-output');
 const sqlOutput = document.getElementById('sql-output');
 const dataOutput = document.getElementById('data-output');
 const chartOutput = document.getElementById('chart-output');
-const themeToggle = document.getElementById('theme-toggle');
-const useLlmToggle = document.getElementById('use-llm');
+const loadingDiv = document.getElementById('loading');
+const errorDiv = document.getElementById('error');
+const copyAnswerBtn = document.getElementById('btn-copy-answer');
+const copySqlBtn = document.getElementById('btn-copy-sql');
+const downloadCsvBtn = document.getElementById('btn-download-csv');
+const resultMeta = document.getElementById('result-meta');
+const chartInfo = document.getElementById('chart-info');
 
-// Progress elements
-const progressContainer = document.getElementById('progress-container');
-const progressTitle = document.getElementById('progress-title');
-const progressPercentage = document.getElementById('progress-percentage');
-const progressFill = document.getElementById('progress-fill');
-const progressMessage = document.getElementById('progress-message');
-const progressSteps = document.getElementById('progress-steps');
-
-// Tab functionality
+// Tabs
 const tabBtns = document.querySelectorAll('.tab-btn');
 const tabPanes = document.querySelectorAll('.tab-pane');
 
-// Initialize the application
-document.addEventListener('DOMContentLoaded', async function() {
-    console.log('🚀 Initializing SQL Agent Application...');
-    
-    // Initialize modules
-    workerManager = new WorkerManager();
-    schemaLogger = new SchemaLogger();
-    modelManager = new ModelManager();
-    configManager = new ConfigManager();
-    notificationManager = new NotificationManager();
-    
-    // Load saved configuration and defaults
-    configManager.loadSavedConfiguration();
-    await configManager.loadConfigDefaults();
+// Cache last successful query for chart reuse
+let lastSql = null;
+let lastData = null;
+let lastQuestion = null;
 
-    // Apply saved theme
-    const savedTheme = localStorage.getItem('theme') || 'light';
-    UIUtils.setTheme(savedTheme);
-    
-    // Setup core event listeners
+function initApp() {
+    const savedDbUri = localStorage.getItem('dbUri');
+    if (savedDbUri) dbUriInput.value = savedDbUri;
     setupEventListeners();
-
-    // Load models and sample questions (async operations)
-    await modelManager.loadModels();
+    loadModelsInto(modelSelect);
     loadSampleQuestions();
+    try {
+        window.__schemaStatus = initSchemaStatus(dbUriInput);
+    } catch (e) { console.warn('Schema status init failed:', e); }
+}
 
-    console.log('✅ Application initialized successfully');
-});
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initApp);
+} else {
+    // DOM already parsed
+    initApp();
+}
 
 function setupEventListeners() {
-    // Tab switching
-    tabBtns.forEach(btn => {
-        btn.addEventListener('click', () => UIUtils.switchTab(btn.dataset.tab));
+    // Tabs
+    tabBtns.forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
+
+    // Persist DB URI
+    dbUriInput.addEventListener('change', () => {
+        localStorage.setItem('dbUri', dbUriInput.value);
     });
 
-    // Theme toggle
-    if (themeToggle) {
-        themeToggle.addEventListener('click', UIUtils.toggleTheme);
-    }
-
-    // Query execution
-    if (runQueryBtn) {
-        runQueryBtn.addEventListener('click', () => executeQuery(false));
-    }
-    if (runChartBtn) {
-        runChartBtn.addEventListener('click', () => executeQuery(true));
-    }
-
-    // Clear cache when question changes
-    if (questionInput) {
-        questionInput.addEventListener('input', () => {
-            const currentQuestion = questionInput.value.trim();
-            if (lastQueryQuestion && lastQueryQuestion !== currentQuestion) {
-                clearCache();
-            }
-        });
-    }
-
-    // Sample questions
-    document.addEventListener('click', function(e) {
-        if (e.target.classList.contains('sample-question')) {
-            if (questionInput) {
-                questionInput.value = e.target.textContent;
-                questionInput.focus();
-            }
-        }
+    // Persist model
+    modelSelect.addEventListener('change', () => {
+        localStorage.setItem('selectedModel', modelSelect.value);
     });
 
-    // Database management event listeners
-    const saveBaseUriBtn = document.getElementById('save-base-uri-btn');
-    const switchDbBtn = document.getElementById('switch-db-btn');
-    const refreshStatusBtn = document.getElementById('refresh-status-btn');
-    const refreshEmbeddingsBtn = document.getElementById('refresh-embeddings-btn');
-    const databaseSwitcher = document.getElementById('database-switcher');
-
-    if (saveBaseUriBtn) {
-        saveBaseUriBtn.addEventListener('click', handleSaveBaseUri);
-    }
-    if (switchDbBtn) {
-        switchDbBtn.addEventListener('click', handleSwitchDatabase);
-    }
-    if (refreshStatusBtn) {
-        refreshStatusBtn.addEventListener('click', () => workerManager.checkWorkerStatus());
-    }
-    if (refreshEmbeddingsBtn) {
-        refreshEmbeddingsBtn.addEventListener('click', handleManualEmbeddingRefresh);
-    }
-
-    // Enter key handling
-    if (questionInput) {
-        questionInput.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' && e.ctrlKey) {
-                executeQuery(false);
+    // Refresh models
+    const refreshModelsBtn = document.getElementById('refresh-models-btn');
+    if (refreshModelsBtn) {
+        refreshModelsBtn.addEventListener('click', async () => {
+            refreshModelsBtn.disabled = true;
+            refreshModelsBtn.textContent = '⏳';
+            try { await loadModelsInto(modelSelect); } finally {
+                refreshModelsBtn.disabled = false;
+                refreshModelsBtn.textContent = '🔄';
             }
         });
     }
 
-    if (databaseSwitcher) {
-        databaseSwitcher.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter') {
-                handleSwitchDatabase();
-            }
-        });
-    }
+    runQueryBtn.addEventListener('click', executeQuery);
+    runChartBtn.addEventListener('click', generateChart);
+    questionInput.addEventListener('keydown', e => { if (e.ctrlKey && e.key === 'Enter') executeQuery(); });
+
+        if (copyAnswerBtn) copyAnswerBtn.addEventListener('click', () => copyToClipboard(answerOutput?.textContent || '', copyAnswerBtn));
+        if (copySqlBtn) copySqlBtn.addEventListener('click', () => copyToClipboard(sqlOutput?.textContent || '', copySqlBtn));
+        if (downloadCsvBtn) downloadCsvBtn.addEventListener('click', downloadCsv);
 }
 
-function handleSaveBaseUri() {
-    try {
-        const baseUri = configManager.getCurrentBaseDbUri();
-        if (!baseUri) {
-            UIUtils.showError('Please enter a base database URL first');
-            return;
-        }
-        
-        const message = workerManager.saveBaseUri(baseUri);
-        UIUtils.showSuccess(message);
-    } catch (error) {
-        UIUtils.showError(error.message);
-    }
-}
+// ---------------- UI Helpers ----------------
+function showLoading(show) { if (loadingDiv) loadingDiv.classList.toggle('hidden', !show); }
+function showError(msg) { if (errorDiv) { errorDiv.textContent = msg; errorDiv.classList.remove('hidden'); } }
+function clearError() { if (errorDiv) { errorDiv.textContent=''; errorDiv.classList.add('hidden'); } }
+function switchTab(tab) { tabBtns.forEach(b=>b.classList.toggle('active', b.dataset.tab===tab)); tabPanes.forEach(p=>p.classList.toggle('active', p.id===`${tab}-tab`)); }
 
-async function handleSwitchDatabase() {
-    const databaseSwitcher = document.getElementById('database-switcher');
-    if (!databaseSwitcher) return;
-
-    const dbName = databaseSwitcher.value.trim();
-    if (!dbName) {
-        UIUtils.showError('Please enter a database name');
-        return;
-    }
-
-    try {
-        const result = await workerManager.switchActiveDatabase(dbName);
-        UIUtils.showSuccess(`Database switched to: ${result.activeDb}`);
-        schemaLogger.logDatabaseSwitch(result.activeDb);
-    } catch (error) {
-        UIUtils.showError(error.message);
-    }
-}
-
-async function executeQuery(generateChart = false) {
-    if (!questionInput || !questionInput.value.trim()) {
-        UIUtils.showError('Please enter a question first');
-        return;
-    }
-
+// ---------------- Query Flow ----------------
+async function executeQuery() {
+    clearError();
+    const db_uri = dbUriInput.value.trim();
     const question = questionInput.value.trim();
-    const dbUri = configManager.getCurrentDbUri();
-    const selectedModel = modelManager.getSelectedModel();
-    const useLlm = useLlmToggle ? useLlmToggle.checked : false;
-
-    if (!dbUri) {
-        UIUtils.showError('Please configure a database URI first');
-        return;
-    }
-
-    if (!selectedModel) {
-        UIUtils.showError('Please select a model first');
-        return;
-    }
-
-    // Check if we can use cached data for chart generation
-    if (generateChart && lastQueryResult && lastQueryQuestion === question && lastQueryResult.data) {
-        console.log('🔄 Using cached data for chart generation');
-        showCacheNotification();
-        await handleChartFromCache();
-        return;
-    }
-
-    console.log(`🚀 ${generateChart ? 'Generating chart' : 'Executing query'}: "${question}"`);
-
-    // Set button loading state
-    setButtonLoadingState(generateChart, true);
-    
-    showProgress(true);
-    updateProgress(0, 'Initializing query execution...');
-
+    const model = modelSelect.value;
+    if (!db_uri || !question) { showError('Please provide both a database URI and a question.'); return; }
+    runQueryBtn.disabled = true;
+    showLoading(true);
     try {
-        const endpoint = generateChart ? '/api/chart' : '/api/query';
-        
-        updateProgress(25, 'Sending request to server...');
-        
-        const response = await fetch(endpoint, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                question: question,
-                db_uri: dbUri,
-                model: selectedModel,
-                use_llm: useLlm
-            }),
-        });
-
-        updateProgress(50, 'Processing response...');
-
-        const result = await response.json();
-        
-        updateProgress(75, 'Rendering results...');
-
-        if (response.ok) {
-            // Cache the results for potential chart generation
-            lastQueryResult = result;
-            lastQueryQuestion = question;
-            
-            handleQuerySuccess(result, generateChart);
-        } else {
-            handleQueryError(result);
-        }
-
-        updateProgress(100, 'Complete!');
-        
-    } catch (error) {
-        console.error('Query execution error:', error);
-        UIUtils.showError(`Network error: ${error.message}`);
-    } finally {
-        // Reset button state
-        setButtonLoadingState(generateChart, false);
-        setTimeout(() => showProgress(false), 1000);
-    }
-}
-
-async function handleChartFromCache() {
-    try {
-        console.log('📊 Generating chart from cached data...');
-        
-        // Set button loading state for chart generation
-        setButtonLoadingState(true, true);
-        
-        showProgress(true);
-        updateProgress(30, 'Generating chart specification...', [
-            {name: 'Query Execution', completed: true},
-            {name: 'Chart Generation', completed: false},
-            {name: 'Rendering', completed: false}
-        ]);
-        
-        // Generate chart spec from cached data
-        const useLlm = useLlmToggle ? useLlmToggle.checked : false;
-        const chartResponse = await fetch('/api/chart_spec', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                question: lastQueryQuestion,
-                data: lastQueryResult.data,
-                sql: lastQueryResult.sql,
-                use_llm: useLlm
-            })
-        });
-        
-        if (chartResponse.ok) {
-            const chartResult = await chartResponse.json();
-            
-            updateProgress(70, 'Rendering chart...', [
-                {name: 'Query Execution', completed: true},
-                {name: 'Chart Generation', completed: true},
-                {name: 'Rendering', completed: false}
-            ]);
-            
-            // Combine cached data with new chart spec
-            const combinedResult = {
-                ...lastQueryResult,
-                vega_spec: chartResult.vega_spec
-            };
-            
-            handleQuerySuccess(combinedResult, true);
-            
-            updateProgress(100, 'Chart generated successfully!', [
-                {name: 'Query Execution', completed: true},
-                {name: 'Chart Generation', completed: true},
-                {name: 'Rendering', completed: true}
-            ]);
-        } else {
-            throw new Error(`Chart generation failed: ${chartResponse.status}`);
-        }
-        
-    } catch (error) {
-        console.error('Error generating chart from cache:', error);
-        UIUtils.showError(`Chart generation failed: ${error.message}`);
-        // Fallback to full query execution
-        console.log('🔄 Falling back to full query execution...');
-        clearCache();
-        executeQuery(true);
-    } finally {
-        setButtonLoadingState(true, false); // Reset chart button
-        setTimeout(() => showProgress(false), 1000);
-    }
-}
-
-function showCacheNotification() {
-    console.log('💡 Using cached query results for faster chart generation');
-    
-    // Show a small notification in the UI
-    const notification = document.createElement('div');
-    notification.className = 'cache-notification';
-    notification.innerHTML = '💡 Using cached data for faster chart generation';
-    notification.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        background: #4CAF50;
-        color: white;
-        padding: 10px 15px;
-        border-radius: 8px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-        z-index: 1000;
-        font-size: 14px;
-        animation: slideInRight 0.3s ease-out;
-    `;
-    
-    document.body.appendChild(notification);
-    
-    setTimeout(() => {
-        notification.style.animation = 'slideOutRight 0.3s ease-in';
-        setTimeout(() => notification.remove(), 300);
-    }, 3000);
-}
-
-function clearCache() {
-    lastQueryResult = null;
-    lastQueryQuestion = null;
-    console.log('🗑️ Query cache cleared');
-}
-
-function setButtonLoadingState(isChart, loading) {
-    const targetBtn = isChart ? runChartBtn : runQueryBtn;
-    const otherBtn = isChart ? runQueryBtn : runChartBtn;
-    
-    if (!targetBtn) return;
-    
-    if (loading) {
-        // Set loading state for active button
-        targetBtn.disabled = true;
-        targetBtn.dataset.originalText = targetBtn.textContent;
-        targetBtn.innerHTML = isChart ? 
-            '<span class="btn-spinner">⏳</span> Generating Chart...' : 
-            '<span class="btn-spinner">⏳</span> Fetching Data...';
-        
-        // Disable other button too
-        if (otherBtn) {
-            otherBtn.disabled = true;
-        }
-    } else {
-        // Reset both buttons
-        if (targetBtn.dataset.originalText) {
-            targetBtn.textContent = targetBtn.dataset.originalText;
-            delete targetBtn.dataset.originalText;
-        }
-        targetBtn.disabled = false;
-        
-        if (otherBtn) {
-            otherBtn.disabled = false;
-        }
-    }
-}
-
-function handleQuerySuccess(result, isChart) {
-    console.log('handleQuerySuccess called with:', { result, isChart });
-    if (isChart) {
-        console.log('Chart mode - vega_spec:', result.vega_spec);
-        // Switch to chart tab and render
-        UIUtils.switchTab('chart');
-        renderChart(result.vega_spec);
-        if (sqlOutput) sqlOutput.textContent = result.answer || 'Query executed successfully';
-    } else {
-        // Switch to data tab and display results
-        UIUtils.switchTab('data');
-        if (sqlOutput) sqlOutput.textContent = result.answer || 'Query executed successfully';
-        if (dataOutput) {
-            if (result.data && Array.isArray(result.data)) {
-                dataOutput.textContent = JSON.stringify(result.data, null, 2);
-            } else {
-                dataOutput.textContent = JSON.stringify(result, null, 2);
-            }
-        }
-    }
-
-    // Show embedding suggestions if available
-    if (result.embedding_suggestions) {
-        displayEmbeddingSuggestions(result.embedding_suggestions);
-    }
-}
-
-function handleQueryError(result) {
-    UIUtils.showError(`Query failed: ${result.error || result.message || 'Unknown error'}`);
-    if (sqlOutput) {
-        sqlOutput.textContent = `Error: ${result.error || result.message || 'Query execution failed'}`;
-    }
-}
-
-function renderChart(chartSpec) {
-    console.log('renderChart called with:', chartSpec);
-    if (!chartOutput) {
-        console.error('chartOutput element not found!');
-        return;
-    }
-    
-    chartOutput.innerHTML = '';
-    
-    if (chartSpec) {
-        console.log('Attempting to render chart with vegaEmbed...');
-        
-        // Safe theme detection
-        let theme = 'default';
+        // Pre-query schema hash check (will mark needs_rebuild if changed)
         try {
-            theme = UIUtils.getCurrentTheme() === 'dark' ? 'dark' : 'default';
-        } catch (e) {
-            console.warn('UIUtils.getCurrentTheme not available, using default theme');
-        }
-        
-        vegaEmbed(chartOutput, chartSpec, {
-            theme: theme,
-            actions: false
-        }).then(() => {
-            console.log('Chart rendered successfully');
-        }).catch(error => {
-            console.error('Chart rendering error:', error);
-            chartOutput.innerHTML = '<p class="error">Failed to render chart: ' + error.message + '</p>';
-        });
-    } else {
-        console.log('No chart spec provided');
-        chartOutput.innerHTML = '<p>No chart data available</p>';
-    }
+            await fetch('/api/admin/embeddings/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db_uri }) });
+        } catch (e) { console.warn('Pre-query schema check failed (continuing):', e); }
+        const res = await fetch('/api/query', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db_uri, question, model }) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        handleQueryResponse(data);
+        // After successful query, refresh schema banner (it might have changed state)
+        try { if (window.__schemaStatus && typeof window.__schemaStatus.refreshSchemaStatus === 'function') window.__schemaStatus.refreshSchemaStatus(false); } catch {}
+    } catch (e) { showError(e.message); } finally { runQueryBtn.disabled = false; showLoading(false); }
 }
 
-function displayEmbeddingSuggestions(suggestions) {
-    const suggestionsDiv = document.getElementById('embedding-suggestions');
-    if (!suggestionsDiv || !suggestions || suggestions.length === 0) return;
-
-    suggestionsDiv.innerHTML = '<h4>📊 Schema Context Used:</h4>' +
-        suggestions.map(s => {
-            // Handle both strings and objects
-            if (typeof s === 'string') return `<div class="suggestion">${s}</div>`;
-            if (typeof s === 'object') return `<div class="suggestion">${JSON.stringify(s, null, 2)}</div>`;
-            return `<div class="suggestion">${String(s)}</div>`;
-        }).join('');
-}
-
-function showProgress(show = true) {
-    if (progressContainer) {
-        progressContainer.classList.toggle('hidden', !show);
-        if (!show) {
-            resetProgress();
-        }
-    }
-}
-
-function updateProgress(percentage, message, steps = []) {
-    if (progressPercentage) progressPercentage.textContent = `${percentage}%`;
-    if (progressFill) progressFill.style.width = `${percentage}%`;
-    if (progressMessage) progressMessage.textContent = message;
-    
-    if (progressSteps && steps.length > 0) {
-        progressSteps.innerHTML = steps.map(step => 
-            `<div class="progress-step ${step.completed ? 'completed' : ''}">${step.name}</div>`
-        ).join('');
-    }
-}
-
-function resetProgress() {
-    updateProgress(0, 'Initializing...', []);
-}
-
-// Manual embedding refresh handler
-async function handleManualEmbeddingRefresh() {
-    const refreshBtn = document.getElementById('refresh-embeddings-btn');
-    const schemaInput = document.getElementById('refresh-schema');
-    const tableInput = document.getElementById('refresh-table');
-    
-    if (!refreshBtn) return;
-    
-    const originalText = refreshBtn.innerHTML;
-    
+async function generateChart() {
+    clearError();
+    const db_uri = dbUriInput.value.trim();
+    const question = questionInput.value.trim();
+    const model = modelSelect.value;
+    if (!db_uri || !question) { showError('Please provide both a database URI and a question.'); return; }
+    if (!lastSql || !Array.isArray(lastData)) { showError('Please run the query first to generate chart.'); return; }
+    showLoading(true);
     try {
-        refreshBtn.disabled = true;
-        refreshBtn.innerHTML = '⏳ Refreshing...';
-        
-        const schema = schemaInput?.value.trim() || null;
-        const table = tableInput?.value.trim() || null;
-        
-        // Use notification manager to handle the refresh
-        await notificationManager.refreshAllEmbeddings(null, schema, table);
-        
-        // Clear input fields on success
-        if (schemaInput) schemaInput.value = '';
-        if (tableInput) tableInput.value = '';
-        
-    } catch (error) {
-        console.error('Manual refresh error:', error);
-        notificationManager.showNotification({
-            type: 'error',
-            title: '❌ Manual Refresh Failed',
-            message: error.message,
-            duration: 5000
-        });
-    } finally {
-        refreshBtn.disabled = false;
-        refreshBtn.innerHTML = originalText;
-    }
+        const res = await fetch('/api/chart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db_uri, question, model, sql: lastSql, data: lastData }) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        handleChartResponse(data);
+    } catch (e) { showError(e.message); } finally { showLoading(false); }
 }
 
-async function loadSampleQuestions() {
-    // This can be enhanced to load from an API endpoint
-    const sampleQuestions = [
-        "Show me the top 10 customers by revenue",
-        "What's the average order value by month?",
-        "List all products with low inventory",
-        "Show sales trends over the last 6 months"
+function handleQueryResponse(data) {
+    if (data.error) { showError(data.error); return; }
+    lastSql = data.sql || null;
+    lastData = Array.isArray(data.data) ? data.data : null;
+    lastQuestion = questionInput.value.trim();
+    if (answerOutput) {
+        answerOutput.textContent = data.answer || 'No answer returned';
+    }
+    sqlOutput.textContent = data.sql || 'No SQL generated';
+    if (Array.isArray(lastData) && lastData.length) dataOutput.textContent = JSON.stringify(lastData, null, 2);
+        updateMeta();
+        enableCsvIfPossible();
+    switchTab('sql');
+}
+
+function handleChartResponse(data) {
+    if (data.error) { showError(data.error); return; }
+    // Only update SQL box; keep previous natural language answer stable
+    if (data.sql) sqlOutput.textContent = data.sql;
+    if (Array.isArray(data.data)) { lastData = data.data; dataOutput.textContent = JSON.stringify(lastData, null, 2); }
+    if (data.vega_spec) renderChart(data.vega_spec); else chartOutput.textContent = 'No chart specification generated';
+    switchTab('chart');
+        updateMeta();
+        enableCsvIfPossible();
+}
+
+// ---------------- Chart Rendering ----------------
+async function renderChart(vegaSpec) {
+    try {
+        chartOutput.innerHTML = '';
+        chartOutput.classList.add('has-chart');
+        const spec = JSON.parse(JSON.stringify(vegaSpec || {}));
+        if (spec && spec.data && spec.data.name === 'table') {
+            const values = Array.isArray(lastData) ? lastData : [];
+            spec.data = { values: values.slice(0, 5000) };
+        }
+        await vegaEmbed('#chart-output', spec, { theme: 'quartz', actions: { export: true, source: false, compiled: false, editor: false } });
+    } catch (error) {
+        console.error('Chart rendering error:', error);
+        chartOutput.innerHTML = `<div class="error">Chart rendering failed: ${error.message}</div>`;
+        chartOutput.classList.remove('has-chart');
+    }
+}
+    // ---------------- Meta / Copy / CSV ----------------
+    function updateMeta() {
+        if (!resultMeta) return;
+        const rows = Array.isArray(lastData) ? lastData.length : 0;
+        const cols = rows ? Object.keys(lastData[0] || {}).length : 0;
+        resultMeta.textContent = `Rows: ${rows}${cols? ' | Cols: '+cols:''}`;
+    }
+    function enableCsvIfPossible() {
+        if (!downloadCsvBtn) return;
+        const ok = Array.isArray(lastData) && lastData.length > 0;
+        downloadCsvBtn.disabled = !ok;
+    }
+    function copyToClipboard(text, btn) {
+        if (!navigator.clipboard) return;
+        navigator.clipboard.writeText(text || '').then(() => {
+            const old = btn.textContent; btn.textContent='Copied'; btn.disabled=true;
+            setTimeout(()=>{ btn.textContent=old; btn.disabled=false; }, 900);
+        }).catch(()=>{});
+    }
+    function downloadCsv() {
+        if (!Array.isArray(lastData) || !lastData.length) return;
+        const headers = Object.keys(lastData[0]);
+        const lines = [headers.join(',')];
+        for (const row of lastData) {
+            lines.push(headers.map(h => formatCsvCell(row[h])).join(','));
+        }
+        const blob = new Blob([lines.join('\n')], {type:'text/csv'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'data.csv'; a.click();
+        setTimeout(()=>URL.revokeObjectURL(url), 2000);
+    }
+    function formatCsvCell(v) {
+        if (v === null || v === undefined) return '';
+        const s = String(v);
+        if (/[",\n]/.test(s)) return '"'+s.replace(/"/g,'""')+'"';
+        return s;
+    }
+
+// ---------------- Samples + Health ----------------
+function loadSampleQuestions() {
+    const samples = [
+        'Show me the top 10 customers by total revenue',
+        'What are the monthly sales trends for the last year?',
+        'Which products have the highest profit margins?',
+        'Show me the distribution of orders by region',
+        'What is the average order value by customer segment?'
     ];
-    
-    // Add sample questions to UI if there's a dedicated section
-    const questionsContainer = document.getElementById('sample-questions');
-    if (questionsContainer) {
-        questionsContainer.innerHTML = sampleQuestions
-            .map(q => `<button class="sample-question btn btn-outline">${q}</button>`)
-            .join('');
-    }
+    let i = 0;
+    const rotate = () => { questionInput.placeholder = `e.g., ${samples[i]}`; i = (i + 1) % samples.length; };
+    rotate();
+    setInterval(() => { if (!questionInput.value) rotate(); }, 3000);
 }
 
-async function handleManualEmbeddingRefresh() {
-    const refreshSchemaInput = document.getElementById('refresh-schema');
-    const refreshTableInput = document.getElementById('refresh-table');
-    const refreshBtn = document.getElementById('refresh-embeddings-btn');
-    
-    if (!refreshBtn) return;
-    
-    const schema = refreshSchemaInput?.value.trim() || null;
-    const table = refreshTableInput?.value.trim() || null;
-    
-    // Set button loading state
-    const originalText = refreshBtn.textContent;
-    refreshBtn.disabled = true;
-    refreshBtn.innerHTML = '<span class="btn-spinner">⏳</span> Refreshing...';
-    
-    try {
-        // Use notification manager for the refresh
-        await notificationManager.refreshAllEmbeddings(null, schema, table);
-        
-        // Clear inputs after successful refresh
-        if (refreshSchemaInput) refreshSchemaInput.value = '';
-        if (refreshTableInput) refreshTableInput.value = '';
-        
-    } catch (error) {
-        console.error('Manual embedding refresh error:', error);
-        UIUtils.showError(`Manual refresh failed: ${error.message}`);
-    } finally {
-        // Reset button
-        refreshBtn.disabled = false;
-        refreshBtn.textContent = originalText;
-    }
+async function checkHealth() {
+    try { const r = await fetch('/api/healthz'); const d = await r.json(); if (!d.status || d.status !== 'ok') throw new Error('unhealthy'); }
+    catch { showError('Backend service is not responding. Please check the server.'); }
 }
+checkHealth();
 
-// Export functions for debugging and testing
-window.AppDebug = {
-    workerManager: () => workerManager,
-    schemaLogger: () => schemaLogger,
-    modelManager: () => modelManager,
-    configManager: () => configManager,
-    notificationManager: () => notificationManager,
-    executeQuery,
-    loadSampleQuestions
-};
+// Test connection button extension
+(function addTestConnectionListener() {
+    const testBtn = document.getElementById('test-connection-btn');
+    if (!testBtn) return;
+    testBtn.addEventListener('click', async () => {
+        const db_uri = dbUriInput.value.trim();
+        const resultDiv = document.getElementById('test-connection-result');
+        if (!db_uri) { resultDiv.innerHTML = '<span class="error">Please enter a database URI first!</span>'; return; }
+        resultDiv.innerHTML = '<span class="loading">Testing connection...</span>';
+        try {
+            const res = await fetch('/api/test_connection', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db_uri }) });
+            const data = await res.json();
+            if (res.ok) resultDiv.innerHTML = '<span class="success">✅ Connection successful!</span>'; else resultDiv.innerHTML = `<span class="error">❌ Connection failed: ${data.error || data.message || 'Unknown error'}</span>`;
+        } catch (e) { resultDiv.innerHTML = `<span class=\"error\">❌ Error: ${e.message}</span>`; }
+    });
+})();

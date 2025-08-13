@@ -1,4 +1,4 @@
-"""core.db.query_engine
+""""core.db.query_engine
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 LangChain tabanlı tam yetenekli bir SQL ajanı.
@@ -11,80 +11,45 @@ olduğunda tablolari listeler, şemayı sorar ve sorguyu çalıştırır.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Callable, Optional
+from typing import Any, Dict, List, Set
 
 import os
+import re
 import sqlalchemy as sa
 from langchain_openai import ChatOpenAI
 from langchain_community.utilities.sql_database import SQLDatabase
 from langchain_community.utilities.sql_database import truncate_word
 from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
-from langchain.callbacks.base import BaseCallbackHandler
-from langchain.schema import LLMResult
-from langchain.schema.agent import AgentAction, AgentFinish
-
-from core.db.embedder import DBEmbedder
-from core.db.verify_sql import verify_sql
+from core.db.verify_sql import verify_sql  # SQL guardrail
+from core.db.embedder import DBEmbedder  # Table selection via embeddings
 
 logger = logging.getLogger(__name__)
 
+_VALID_SCHEMA = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-class ProgressCallbackHandler(BaseCallbackHandler):
-    """Custom callback handler to track LangChain agent progress."""
 
-    def __init__(self, progress_callback: Callable[[str, str, int], None]):
-        self.progress_callback = progress_callback
-        self.current_step = 0
-        self.total_steps = 6  # Estimated total steps
+def _safe_schema(s: str | None) -> str | None:
+    if not s:
+        return None
+    return s if _VALID_SCHEMA.match(s) else None
 
-    def on_llm_start(
-        self, serialized: Dict[str, Any], prompts: list[str], **kwargs
-    ) -> None:
-        """Called when LLM starts generating."""
-        # serialized, prompts, kwargs intentionally unused - required by LangChain interface
-        self.current_step += 1
-        progress = min(30 + (self.current_step * 10), 70)
-        self.progress_callback(
-            "llm_thinking", "AI is analyzing your question...", progress
-        )
 
-    def on_llm_end(self, response: LLMResult, **kwargs) -> None:
-        """Called when LLM finishes generating."""
-        # response, kwargs intentionally unused - required by LangChain interface
-        self.current_step += 1
-        progress = min(40 + (self.current_step * 8), 75)
-        self.progress_callback(
-            "llm_response", "AI has generated a response...", progress
-        )
-
-    def on_agent_action(self, action: AgentAction, **kwargs) -> None:
-        """Called when agent is about to execute an action."""
-        # kwargs intentionally unused - required by LangChain interface
-        tool_name = action.tool
-        self.current_step += 1
-
-        if "sql_db_list_tables" in tool_name.lower():
-            progress = 45
-            self.progress_callback(
-                "db_schema", "Exploring database schema...", progress
-            )
-        elif "sql_db_schema" in tool_name.lower():
-            progress = 55
-            self.progress_callback(
-                "table_schema", "Analyzing table structure...", progress
-            )
-        elif "sql_db_query" in tool_name.lower():
-            progress = 70
-            self.progress_callback("sql_execution", "Executing SQL query...", progress)
-        else:
-            progress = min(50 + (self.current_step * 5), 80)
-            self.progress_callback("agent_action", f"Executing: {tool_name}", progress)
-
-    def on_agent_finish(self, finish: AgentFinish, **kwargs) -> None:
-        """Called when agent finishes."""
-        # finish, kwargs intentionally unused - required by LangChain interface
-        self.progress_callback("agent_complete", "Agent execution completed!", 90)
+def _hits_to_fqn(hits: List[Dict[str, Any]]) -> tuple[list[str], Set[str]]:
+    """Embedder hitlerinden FQN (schema.table) listesi ve şema kümesi üret."""
+    fqns: list[str] = []
+    schemas: set[str] = set()
+    for h in hits:
+        t = (h.get("table") or "").strip()
+        s = _safe_schema((h.get("schema") or "").strip())
+        if not t or t.startswith("langchain_pg_"):
+            continue
+        q = f"{s}.{t}" if s else t
+        if q not in fqns:
+            fqns.append(q)
+        if s:
+            schemas.add(s)
+    return fqns, schemas
 
 
 class LoggingSQLDatabase(SQLDatabase):
@@ -99,30 +64,32 @@ class LoggingSQLDatabase(SQLDatabase):
         parameters: Dict[str, Any] | None = None,
         execution_options: Dict[str, Any] | None = None,
     ) -> sa.engine.Result | str | list[Dict[str, Any]]:
+        # Keep a copy of incoming SQL (string form)
         raw_sql = str(command)
-        # Allow non-SELECT statements for agent operations
-        # Disable cost guard for agent operations
-        safe_sql = verify_sql(
-            raw_sql,
-            enforce_read_only=False,
-            engine=self._engine,
-            auto_limit=True,
-            cost_guard=False,
-        )
-        self.last_query = safe_sql
+
+        # Verify and possibly rewrite SQL (add LIMIT, block mutations, etc.)
+        try:
+            safe_sql = verify_sql(raw_sql, engine=self._engine, auto_limit=True, cost_guard=False)
+            command = safe_sql
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"SQL verification failed: {e}")
+            # Re-raise to block execution of unsafe SQL
+            raise
+
+        self.last_query = str(command)
         result = self._execute(
-            sa.text(safe_sql),
+            command,
             fetch,
             parameters=parameters,
             execution_options=execution_options,
         )
 
+        # Convert to JSON-serialisable rows list
         if fetch == "cursor":
-            # nothing meaningful to store for charting
-            self.last_result = []
+            self.last_result = []  # not serialisable; keep empty
             return result
 
-        res = [
+        rows_as_dicts = [
             {
                 column: truncate_word(value, length=self._max_string_length)
                 for column, value in r.items()
@@ -130,11 +97,14 @@ class LoggingSQLDatabase(SQLDatabase):
             for r in result
         ]
 
-        # store the processed rows for later retrieval
-        self.last_result = res
+        # Store JSON-safe result for API usage
+        self.last_result = rows_as_dicts
 
+        # Preserve original return contract of SQLDatabase.run
         if not include_columns:
-            res = [tuple(row.values()) for row in res]
+            res = [tuple(row.values()) for row in rows_as_dicts]
+        else:
+            res = rows_as_dicts
 
         if not res:
             return ""
@@ -160,8 +130,6 @@ class QueryEngine:
         db_uri: str,
         llm_model: str = "deepseek/deepseek-chat",
     ) -> None:
-        self.db_uri = db_uri
-        self.llm_model = llm_model
         self.engine = sa.create_engine(db_uri)
 
         # OpenRouter için ChatOpenAI yapılandırması
@@ -174,19 +142,19 @@ class QueryEngine:
             base_url="https://openrouter.ai/api/v1",
             model=llm_model,
             temperature=0.0,
-            max_tokens=4000,
-            timeout=30,
             default_headers={
                 "HTTP-Referer": "https://github.com/openrouter-chat/openrouter-langchain",
-                "X-Title": "LangChain SQL Agent",
-            },
+                "X-Title": "LangChain SQL Agent"
+            }
         )
 
-        # Her veritabanı için izole bir DBEmbedder oluştur
-        # URI'den veritabanı adını çıkararak doğru vektör deposunu hedeflemesini sağla
-        db_name = sa.engine.url.make_url(db_uri).database
-        self.embedder = DBEmbedder(engine=self.engine, db_name=db_name)
-        self.embedder.ensure_store()
+        # Embedding-based table selector
+        self.embedder = DBEmbedder(self.engine)
+
+        # Varsayılan DB (tüm şema için, kısıtlama yok)
+        self.db = LoggingSQLDatabase(self.engine, sample_rows_in_table_info=2)
+
+    # Kalıcı agent yaratmıyoruz; her çağrıda seçili tablo/şema ile transient agent kuruyoruz.
 
         logger.info(f"Using OpenRouter with model: {llm_model}")
 
@@ -194,132 +162,105 @@ class QueryEngine:
     # Public API
     # ------------------------------------------------------------------ #
 
-    def ask(
-        self,
-        nl_query: str,
-        progress_callback: Optional[Callable[[str, str, int], None]] = None,
-    ) -> Dict[str, Any]:
-        """Doğal dil sorusunu LangChain SQL ajanına ilet."""
-
-        # Setup progress callback if provided
-        callbacks = []
-        if progress_callback:
-            callbacks.append(ProgressCallbackHandler(progress_callback))
-
-        # Anlamsal arama ile ilgili tabloları bul
-        hits = self.embedder.similarity_search(
-            nl_query, k=5
-        )  # Daha fazla sonuç alıp filtreleyelim
-        qualified_table_names = [hit["table"] for hit in hits if hit.get("table")]
-
-        # Sistem şemalarını (örn: information_schema) filtrele
-        user_tables = [
-            t
-            for t in qualified_table_names
-            if t and not t.startswith("information_schema.")
-        ]
-
-        logger.info(f"🔍 Embedder'dan gelen tablolar: {qualified_table_names}")
-        logger.info(f"📋 Sorgu için ilgili tablolar bulundu: {user_tables}")
-        logger.info(f"🔗 Database URI: {self.db_uri}")
-
-        # Debug: Veritabanında gerçekte hangi tablolar var?
+    def ask(self, nl_query: str) -> Dict[str, Any]:
+        """Doğal dil sorusunu LangChain SQL ajanına ilet.
+        Embedding ile en alakalı tabloları seçip ajanı sınırlı şema ile koşturur.
+        """
+        # 1) Relevant tables via embeddings (best-effort)
+        db_for_run: LoggingSQLDatabase = self.db
         try:
-            with self.engine.connect() as conn:
-                # Mevcut schema'yı kontrol et
-                current_schema = conn.execute(
-                    sa.text("SELECT current_schema()")
-                ).scalar()
-                logger.info(f"📍 Current schema: {current_schema}")
+            hits = self.embedder.similarity_search(nl_query, k=6)
 
-                # Tüm tabloları listele
-                all_tables = conn.execute(
-                    sa.text(
-                        """
-                    SELECT table_schema, table_name 
-                    FROM information_schema.tables 
-                    WHERE table_type = 'BASE TABLE'
-                    AND table_schema NOT IN ('information_schema', 'pg_catalog')
-                    ORDER BY table_schema, table_name
-                """
+            # Log embedding hits for observability
+            try:
+                hit_summ = [
+                    f"{(h.get('schema') + '.' if h.get('schema') else '')}{h.get('table')} (score={h.get('score'):.3f})"
+                    for h in hits if h.get('table')
+                ]
+                logger.info("Embedding hits: %s", ", ".join(hit_summ))
+            except Exception:
+                logger.debug("Could not log embedding hits; continuing.")
+
+            # FQN + şema kümesi
+            fqns, schemas = _hits_to_fqn(hits)
+
+            if fqns:
+                # LangChain SQLDatabase include_tables param'ı şema nitelikli isim (schema.table) değil sadece tablo adı bekler.
+                # Bu nedenle önce hit'leri şemaya göre gruplayıp güvenli strateji seçiyoruz.
+                schema_table_map: dict[str | None, list[str]] = {}
+                for f in fqns:
+                    if "." in f:
+                        sch, tbl = f.split(".", 1)
+                    else:
+                        sch, tbl = None, f
+                    schema_table_map.setdefault(sch, []).append(tbl)
+
+                if len(schema_table_map) == 1:
+                    # Tek şema (veya None): direkt kısıtlı DB oluştur
+                    only_schema, tables = next(iter(schema_table_map.items()))
+                    log_list = [f"{only_schema+'.' if only_schema else ''}{t}" for t in tables]
+                    logger.info("Restricting agent to tables (schema-aware): %s", ", ".join(log_list))
+                    db_for_run = LoggingSQLDatabase(
+                        self.engine,
+                        schema=only_schema,  # None ise varsayılan search_path
+                        include_tables=tables,
+                        sample_rows_in_table_info=2,
                     )
-                ).fetchall()
-
-                logger.info(
-                    f"🗄️ Veritabanındaki tüm tablolar: {[(t[0], t[1]) for t in all_tables]}"
-                )
-
-        except Exception as e:
-            logger.error(f"❌ Debug sorgusu başarısız: {e}")
-
-        schema_name = None
-
-        if user_tables:
-            # Şema ve tablo adlarını ayır
-            # Not: Bu basit mantık, tüm tabloların aynı şemada olduğunu varsayar.
-            schemas = {t.split(".")[0] for t in user_tables if "." in t}
-            if schemas:
-                schema_name = list(schemas)[0]
-                # Schema belirtildiğinde include_tables kullanmıyoruz
-                # Çünkü schema içindeki tablolar otomatik olarak dahil ediliyor
-                logger.info(
-                    f"✅ Schema tespit edildi: {schema_name}, tüm tablolar dahil edilecek"
-                )
+                else:
+                    # Çoklu şema senaryosu: SQLDatabase aynı anda birden fazla şemayı include_tables ile daraltamıyor.
+                    # Bu durumda fail-open yerine ileride özel filtre için not bırak.
+                    logger.info(
+                        "Multiple schemas in embedding hits (%s); skipping hard restriction (using full DB).",
+                        ", ".join(fqns),
+                    )
+                    db_for_run = self.db
             else:
-                # Schema yok, sadece tablo isimleri var - bunları include_tables olarak kullan
-                logger.info(f"⚠️ Schema yok, sadece tablolar: {user_tables}")
+                db_for_run = self.db
 
-        # Sadece ilgili tabloları içeren bir SQLDatabase nesnesi oluştur
-        if schema_name:
-            # Schema var - include_tables kullanmadan schema'daki tüm tabloları al
-            db = LoggingSQLDatabase.from_uri(
-                self.db_uri,
-                schema=schema_name,
-                sample_rows_in_table_info=3,
-            )
-        elif user_tables:
-            # Schema yok ama tablo listesi var - include_tables kullan
-            db = LoggingSQLDatabase.from_uri(
-                self.db_uri,
-                include_tables=user_tables,
-                sample_rows_in_table_info=3,
-            )
-        else:
-            # Ne schema ne de tablo listesi - tüm tabloları al
-            db = LoggingSQLDatabase.from_uri(
-                self.db_uri,
-                sample_rows_in_table_info=3,
-            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Embedding-based table selection failed, falling back. Reason: {e}")
+            db_for_run = self.db
 
-        toolkit = SQLDatabaseToolkit(db=db, llm=self.llm)
+        # 2) Build a transient agent bound to the selected DB
+        toolkit = SQLDatabaseToolkit(db=db_for_run, llm=self.llm)
         agent = create_sql_agent(
             llm=self.llm,
             toolkit=toolkit,
-            verbose=False,
+            verbose=True,
             agent_executor_kwargs={"handle_parsing_errors": True},
         )
 
-        result = agent.invoke({"input": nl_query}, config={"callbacks": callbacks})
+        # 3) Invoke agent
+        result = agent.invoke({"input": nl_query})
         answer = result.get("output", "") if isinstance(result, dict) else str(result)
 
-        generated_sql = getattr(db, "last_query", "")
-        # If no SQL was generated, skip validation
-        if not generated_sql.strip():
-            safe_sql = generated_sql
-        else:
-            # Validate without read-only enforcement and skip cost guard for agent
-            safe_sql = verify_sql(
-                generated_sql,
-                enforce_read_only=False,
-                engine=self.engine,
-                cost_guard=False,
-            )
+        # 4) Ensure we have SQL + data for downstream charting
+        sql_str = getattr(db_for_run, "last_query", "")
+        data_rows = getattr(db_for_run, "last_result", [])
 
-        rows = getattr(db, "last_result", [])
+        if not sql_str or not isinstance(data_rows, list) or len(data_rows) == 0:
+            # Fallback: ask LLM to emit only SQL, then verify and execute
+            try:
+                logger.info("Agent produced no tool output; attempting SQL-only fallback…")
+                sql_only_prompt = (
+                    "Return ONLY a valid SQL query that answers the question for this database. "
+                    "Do not include explanations or backticks. Question: " + nl_query
+                )
+                sql_resp = self.llm.invoke(sql_only_prompt)
+                raw_sql = getattr(sql_resp, "content", None) or str(sql_resp)
+                raw_sql = raw_sql.strip()
+                safe_sql = verify_sql(raw_sql, engine=self.engine, auto_limit=True, cost_guard=False)
+                # Execute to populate last_query/last_result
+                _ = db_for_run.run(safe_sql, fetch="all")
+                sql_str = getattr(db_for_run, "last_query", str(safe_sql))
+                data_rows = getattr(db_for_run, "last_result", [])
+                if not answer:
+                    answer = "Executed fallback SQL."
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"SQL-only fallback failed: {e}")
 
         return {
             "answer": answer,
-            "sql": safe_sql,
-            "data": rows,
-            "rowcount": len(rows),
+            "sql": sql_str,
+            "data": data_rows,
         }

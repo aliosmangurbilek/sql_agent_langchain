@@ -6,7 +6,10 @@ POST /api/chart
 Body (JSON):
 {
   "db_uri": "postgresql://user:pw@localhost:5432/pagila",
-  "question": "monthly rentals per store in 2005"
+  "question": "monthly rentals per store in 2005",
+  // Optional fast-path to avoid re-running agent:
+  "sql": "SELECT ...",
+  "data": [ { ... }, ... ]
 }
 
 Response:
@@ -16,15 +19,13 @@ Response:
   "rowcount": 42,
   "vega_spec": { ... }          # Vega-Lite 5 JSON
 }
-
-Not: Eğer ortamda OPENAI_API_KEY varsa ve LLM destekli grafik isteniyorsa,
-otomatik olarak OpenAI API ile daha iyi grafik spec'i üretilir.
 """
 
 from __future__ import annotations
 
 import logging
 from functools import lru_cache
+from typing import List, Dict, Any
 
 from flask import Blueprint, jsonify, request
 from werkzeug.exceptions import BadRequest
@@ -37,7 +38,7 @@ bp = Blueprint("chart", __name__, url_prefix="/api")
 
 
 @lru_cache(maxsize=16)
-def _get_engine(db_uri: str, llm_model: str = "gpt-4o-mini") -> QueryEngine:
+def _get_engine(db_uri: str, llm_model: str = "deepseek/deepseek-chat") -> QueryEngine:
     # Her db_uri ve llm_model kombinasyonu için bir kere QueryEngine oluştur
     # Bu sayede aynı veritabanı için birden fazla kez embedding yapmayız
     return QueryEngine(db_uri, llm_model=llm_model)
@@ -48,13 +49,8 @@ def run_chart():
     """
     Doğal dil isteğini alır → SQL + veri → Vega-Lite spec döner.
 
-    Front-end tarafı:
-      • Dönen `data` dizisini doğrudan inline-data olarak kullanabilir
-        *veya* ayrı `/api/query` çağrısından aldığı veri ile aynı yapıdır.
-      • `vega_spec` içindeki `"data": {"name": "table"}`
-        ise front-end uygun şekilde embed edecektir.
-
-    Not: Ortamda OPENAI_API_KEY varsa, chart üretiminde OpenAI LLM kullanılır.
+    Eğer body içerisinde `sql` ve/veya `data` verilmişse agent tekrar
+    çalıştırılmaz; doğrudan bu verilerden grafik spec'i üretilir.
     """
     if not request.is_json:
         raise BadRequest("Content-Type must be application/json")
@@ -62,28 +58,41 @@ def run_chart():
     body = request.get_json(silent=True) or {}
     db_uri = body.get("db_uri")
     question = body.get("question")
-    model = body.get("model", "gpt-4o-mini")  # Default to gpt-4o-mini if not specified
-    use_llm = bool(body.get("use_llm", False))
+    model = body.get("model", "deepseek/deepseek-chat")
 
     if not db_uri or not question:
         raise BadRequest("Both 'db_uri' and 'question' fields are required")
 
     try:
-        qe = _get_engine(db_uri, llm_model=model)
-        result = qe.ask(question)  # {"sql", "data", "rowcount"}
+        sql = body.get("sql")
+        rows: List[Dict[str, Any]] | None = body.get("data")
 
-        # Grafik spec'ini üret
+        if sql and isinstance(rows, list):
+            # Fast-path: Frontend'den gelen sonuçları kullan
+            result_sql = sql
+            result_rows = rows
+        else:
+            # Gerekirse agent'i bir kez çalıştır
+            qe = _get_engine(db_uri, llm_model=model)
+            result = qe.ask(question)              # {"answer", "sql", "data"}
+            result_sql = result.get("sql", "")
+            result_rows = result.get("data") or []
+
+        rowcount = len(result_rows) if isinstance(result_rows, list) else 0
+
+        # Grafik spec'ini üret (tek geçiş, agent yok)
         vega_spec = generate_chart_spec(
             question=question,
-            sql=result["sql"],
-            data=result["data"],
-            use_llm=use_llm,
+            sql=result_sql,
+            data=result_rows,
         )
 
         return (
             jsonify(
                 {
-                    **result,  # sql, data, rowcount
+                    "sql": result_sql,
+                    "data": result_rows,
+                    "rowcount": rowcount,
                     "vega_spec": vega_spec,
                 }
             ),
@@ -93,65 +102,3 @@ def run_chart():
     except Exception as exc:  # noqa: BLE001
         logger.exception("Chart generation failed")
         return jsonify({"error": str(exc)}), 500
-
-
-@bp.post("/chart_spec")
-def generate_chart_spec_only():
-    """
-    Generate chart specification from existing data (cache optimization).
-
-    Body (JSON):
-    {
-      "question": "What are the top directors?",
-      "data": [...],     # Existing query data
-      "sql": "SELECT ..." # Original SQL query
-    }
-
-    Response:
-    {
-      "vega_spec": { ... }  # Vega-Lite 5 JSON only
-    }
-    """
-    if not request.is_json:
-        raise BadRequest("Content-Type must be application/json")
-
-    body = request.get_json(silent=True) or {}
-    question = body.get("question", "")
-    data = body.get("data", [])
-    sql = body.get("sql", "")
-    use_llm = bool(body.get("use_llm", False))
-
-    if not data:
-        raise BadRequest("'data' field is required and cannot be empty")
-
-    if not question:
-        raise BadRequest("'question' field is required")
-
-    try:
-        logger.info(
-            f"🎨 Generating chart spec from cached data for: {question[:50]}..."
-        )
-
-        # Generate chart spec using existing data
-        vega_spec = generate_chart_spec(
-            question=question,
-            sql=sql,
-            data=data,
-            use_llm=use_llm,
-        )
-
-        logger.info(f"✅ Chart spec generated successfully ({len(data)} data points)")
-
-        return (
-            jsonify(
-                {"status": "success", "vega_spec": vega_spec, "data_points": len(data)}
-            ),
-            200,
-        )
-
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Chart spec generation failed")
-        return (
-            jsonify({"error": f"Chart specification generation failed: {str(exc)}"}),
-            500,
-        )
