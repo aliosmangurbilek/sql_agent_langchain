@@ -36,3 +36,4 @@ core/worker/__pycache__/listen_and_refresh.cpython-312.pyc
 mcp-server-demo/.python-version
 mcp-server-demo/pyproject.toml
 api/__pycache__/routes_admin.cpython-312.pyc
+.idea/workspace.xml
