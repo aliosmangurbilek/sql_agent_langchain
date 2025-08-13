@@ -11,6 +11,7 @@ const modelSelect = document.getElementById('model-select');
 const questionInput = document.getElementById('question');
 const runQueryBtn = document.getElementById('run-query');
 const runChartBtn = document.getElementById('run-chart');
+const answerOutput = document.getElementById('answer-output');
 const sqlOutput = document.getElementById('sql-output');
 const dataOutput = document.getElementById('data-output');
 const chartOutput = document.getElementById('chart-output');
@@ -118,13 +119,17 @@ function handleQueryResponse(data) {
     lastSql = data.sql || null;
     lastData = Array.isArray(data.data) ? data.data : null;
     lastQuestion = questionInput.value.trim();
-    sqlOutput.textContent = data.answer || data.sql || 'No answer returned';
+    if (answerOutput) {
+        answerOutput.textContent = data.answer || 'No answer returned';
+    }
+    sqlOutput.textContent = data.sql || 'No SQL generated';
     if (Array.isArray(lastData) && lastData.length) dataOutput.textContent = JSON.stringify(lastData, null, 2);
     switchTab('sql');
 }
 
 function handleChartResponse(data) {
     if (data.error) { showError(data.error); return; }
+    // Only update SQL box; keep previous natural language answer stable
     if (data.sql) sqlOutput.textContent = data.sql;
     if (Array.isArray(data.data)) { lastData = data.data; dataOutput.textContent = JSON.stringify(lastData, null, 2); }
     if (data.vega_spec) renderChart(data.vega_spec); else chartOutput.textContent = 'No chart specification generated';
