@@ -58,15 +58,25 @@ export function initSchemaStatus(dbUriInput) {
     checkBtn.disabled = !dbUriInput.value.trim();
   }
 
-  async function refreshSchemaStatus() {
+  let pollingTimer = null;
+
+  async function refreshSchemaStatus(silent = true) {
     const dbUri = dbUriInput.value.trim();
-    if (!dbUri) { hideSchemaBanner(); return; }
+    if (!dbUri) { hideSchemaBanner(); if (pollingTimer) { clearInterval(pollingTimer); pollingTimer=null; } return; }
     try {
       const st = await fetchSchemaStatus(dbUri);
       updateSchemaBanner(st);
     } catch (e) {
-      console.warn('Schema status error:', e);
+      if (!silent) console.warn('Schema status error:', e);
     }
+  }
+
+  function startAutoPolling() {
+    if (pollingTimer) clearInterval(pollingTimer);
+    pollingTimer = setInterval(() => {
+      // Lightweight status poll (live signature already computed inside)
+      refreshSchemaStatus(true);
+    }, 10000); // 10s
   }
 
   checkBtn.addEventListener('click', async () => {
@@ -92,9 +102,9 @@ export function initSchemaStatus(dbUriInput) {
     refreshSchemaStatus();
   });
 
-  dbUriInput.addEventListener('change', refreshSchemaStatus);
+  dbUriInput.addEventListener('change', () => { refreshSchemaStatus(false); startAutoPolling(); });
 
-  if (dbUriInput.value.trim()) refreshSchemaStatus();
+  if (dbUriInput.value.trim()) { refreshSchemaStatus(false); startAutoPolling(); }
 
-  return { refreshSchemaStatus };
+  return { refreshSchemaStatus, startAutoPolling };
 }

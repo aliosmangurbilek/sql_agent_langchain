@@ -17,6 +17,11 @@ const dataOutput = document.getElementById('data-output');
 const chartOutput = document.getElementById('chart-output');
 const loadingDiv = document.getElementById('loading');
 const errorDiv = document.getElementById('error');
+const copyAnswerBtn = document.getElementById('btn-copy-answer');
+const copySqlBtn = document.getElementById('btn-copy-sql');
+const downloadCsvBtn = document.getElementById('btn-download-csv');
+const resultMeta = document.getElementById('result-meta');
+const chartInfo = document.getElementById('chart-info');
 
 // Tabs
 const tabBtns = document.querySelectorAll('.tab-btn');
@@ -33,7 +38,9 @@ function initApp() {
     setupEventListeners();
     loadModelsInto(modelSelect);
     loadSampleQuestions();
-    initSchemaStatus(dbUriInput);
+    try {
+        window.__schemaStatus = initSchemaStatus(dbUriInput);
+    } catch (e) { console.warn('Schema status init failed:', e); }
 }
 
 if (document.readyState === 'loading') {
@@ -73,6 +80,10 @@ function setupEventListeners() {
     runQueryBtn.addEventListener('click', executeQuery);
     runChartBtn.addEventListener('click', generateChart);
     questionInput.addEventListener('keydown', e => { if (e.ctrlKey && e.key === 'Enter') executeQuery(); });
+
+        if (copyAnswerBtn) copyAnswerBtn.addEventListener('click', () => copyToClipboard(answerOutput?.textContent || '', copyAnswerBtn));
+        if (copySqlBtn) copySqlBtn.addEventListener('click', () => copyToClipboard(sqlOutput?.textContent || '', copySqlBtn));
+        if (downloadCsvBtn) downloadCsvBtn.addEventListener('click', downloadCsv);
 }
 
 // ---------------- UI Helpers ----------------
@@ -91,10 +102,16 @@ async function executeQuery() {
     runQueryBtn.disabled = true;
     showLoading(true);
     try {
+        // Pre-query schema hash check (will mark needs_rebuild if changed)
+        try {
+            await fetch('/api/admin/embeddings/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db_uri }) });
+        } catch (e) { console.warn('Pre-query schema check failed (continuing):', e); }
         const res = await fetch('/api/query', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db_uri, question, model }) });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
         handleQueryResponse(data);
+        // After successful query, refresh schema banner (it might have changed state)
+        try { if (window.__schemaStatus && typeof window.__schemaStatus.refreshSchemaStatus === 'function') window.__schemaStatus.refreshSchemaStatus(false); } catch {}
     } catch (e) { showError(e.message); } finally { runQueryBtn.disabled = false; showLoading(false); }
 }
 
@@ -124,6 +141,8 @@ function handleQueryResponse(data) {
     }
     sqlOutput.textContent = data.sql || 'No SQL generated';
     if (Array.isArray(lastData) && lastData.length) dataOutput.textContent = JSON.stringify(lastData, null, 2);
+        updateMeta();
+        enableCsvIfPossible();
     switchTab('sql');
 }
 
@@ -134,6 +153,8 @@ function handleChartResponse(data) {
     if (Array.isArray(data.data)) { lastData = data.data; dataOutput.textContent = JSON.stringify(lastData, null, 2); }
     if (data.vega_spec) renderChart(data.vega_spec); else chartOutput.textContent = 'No chart specification generated';
     switchTab('chart');
+        updateMeta();
+        enableCsvIfPossible();
 }
 
 // ---------------- Chart Rendering ----------------
@@ -153,6 +174,44 @@ async function renderChart(vegaSpec) {
         chartOutput.classList.remove('has-chart');
     }
 }
+    // ---------------- Meta / Copy / CSV ----------------
+    function updateMeta() {
+        if (!resultMeta) return;
+        const rows = Array.isArray(lastData) ? lastData.length : 0;
+        const cols = rows ? Object.keys(lastData[0] || {}).length : 0;
+        resultMeta.textContent = `Rows: ${rows}${cols? ' | Cols: '+cols:''}`;
+    }
+    function enableCsvIfPossible() {
+        if (!downloadCsvBtn) return;
+        const ok = Array.isArray(lastData) && lastData.length > 0;
+        downloadCsvBtn.disabled = !ok;
+    }
+    function copyToClipboard(text, btn) {
+        if (!navigator.clipboard) return;
+        navigator.clipboard.writeText(text || '').then(() => {
+            const old = btn.textContent; btn.textContent='Copied'; btn.disabled=true;
+            setTimeout(()=>{ btn.textContent=old; btn.disabled=false; }, 900);
+        }).catch(()=>{});
+    }
+    function downloadCsv() {
+        if (!Array.isArray(lastData) || !lastData.length) return;
+        const headers = Object.keys(lastData[0]);
+        const lines = [headers.join(',')];
+        for (const row of lastData) {
+            lines.push(headers.map(h => formatCsvCell(row[h])).join(','));
+        }
+        const blob = new Blob([lines.join('\n')], {type:'text/csv'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'data.csv'; a.click();
+        setTimeout(()=>URL.revokeObjectURL(url), 2000);
+    }
+    function formatCsvCell(v) {
+        if (v === null || v === undefined) return '';
+        const s = String(v);
+        if (/[",\n]/.test(s)) return '"'+s.replace(/"/g,'""')+'"';
+        return s;
+    }
 
 // ---------------- Samples + Health ----------------
 function loadSampleQuestions() {
