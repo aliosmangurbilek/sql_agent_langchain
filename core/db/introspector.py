@@ -92,7 +92,9 @@ def _get_metadata_pg_fast(engine: sa.Engine, sample_rows: int = 0) -> List[Dict[
             n.nspname AS schema,
             c.relname AS table,
             a.attname AS column,
-            format_type(a.atttypid, a.atttypmod) AS type
+            format_type(a.atttypid, a.atttypmod) AS type,
+            obj_description(c.oid) AS table_comment,
+            col_description(c.oid, a.attnum) AS column_comment
         FROM pg_attribute a
         JOIN pg_class c ON a.attrelid = c.oid
         JOIN pg_namespace n ON c.relnamespace = n.oid
@@ -120,6 +122,16 @@ def _get_metadata_pg_fast(engine: sa.Engine, sample_rows: int = 0) -> List[Dict[
             "type": typ,
             "category": _classify_from_str(typ),
         }
+        # Include comments if present
+        try:
+            tcomm = r.get("table_comment")
+            ccomm = r.get("column_comment")
+            if tcomm:
+                rec["table_comment"] = str(tcomm)
+            if ccomm:
+                rec["column_comment"] = str(ccomm)
+        except Exception:
+            pass
         meta.append(rec)
 
     if sample_rows > 0:

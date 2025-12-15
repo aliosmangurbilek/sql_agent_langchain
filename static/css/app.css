@@ -36,6 +36,12 @@ body {
     color: #c53030;
     border-color: #fbb6b6;
 }
+.schema-banner.readonly {
+    background: #edf2f7;
+    color: #2d3748;
+    border-color: #cbd5e0;
+    font-style: italic;
+}
 .schema-banner .schema-banner-actions {
     display: flex;
     gap: 0.5rem;

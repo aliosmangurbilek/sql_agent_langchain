@@ -24,7 +24,14 @@ _E5_PASSAGE_PREFIX = "passage: "
 
 
 class DBEmbedder:
-    """Veritabanı şeması için embedding + PGVector arama katmanı."""
+    """Veritabanı şeması için embedding + PGVector arama katmanı.
+
+    Embedding modeli *lazy* yüklenir ve aynı (model_name, device) kombinasyonu
+    için process seviyesinde cache edilir. Böylece sık status polling sırasında
+    model tekrar tekrar inşa edilmez.
+    """
+
+    _MODEL_CACHE: dict[tuple[str, str], HuggingFaceEmbeddings] = {}
 
     def __init__(
         self,
@@ -33,7 +40,8 @@ class DBEmbedder:
         db_name: str | None = None,
         collection_prefix: str = "schema_embeddings",
         embedding_model: str = "intfloat/e5-large-v2",
-        force_rebuild: bool = False
+        force_rebuild: bool = False,
+        preload_embeddings: bool = False,  # True ise constructor'da modeli yükler
     ) -> None:
         self.engine = engine
         self.db_name = db_name or (engine.url.database or "default")
@@ -44,6 +52,18 @@ class DBEmbedder:
         except Exception:
             self.conn_str = str(engine.url)
 
+        # Determine if we likely have CREATE privilege in primary schema (read-only vs writable)
+        self.meta_writable: bool = True
+        try:
+            if self.engine.url.get_backend_name().startswith("postgres"):
+                with self.engine.connect() as conn:
+                    # Public schema is default for our meta table
+                    writable = conn.execute(sa.text("SELECT has_schema_privilege('public','CREATE')")).scalar()
+                    self.meta_writable = bool(writable)
+        except Exception:
+            # On any failure assume writable (optimistic) – actual permission errors will be caught later
+            self.meta_writable = False
+
         # Auto-select device for embeddings (GPU if available)
         _device = "cpu"
         try:
@@ -53,15 +73,38 @@ class DBEmbedder:
         except Exception:
             _device = "cpu"
 
-        self._embeddings = HuggingFaceEmbeddings(
-            model_name=embedding_model,
-            model_kwargs={"device": _device},
-            encode_kwargs={"normalize_embeddings": True},
-        )
+        # Lazy load placeholders
+        self._embedding_model_name = embedding_model
+        self._device = _device
+        self._embeddings: HuggingFaceEmbeddings | None = None
+
+        if preload_embeddings:
+            try:
+                self._get_embeddings()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Preload embeddings failed (will retry lazily): %s", e)
         if force_rebuild:
             self.rebuild()
 
     # ------------------------------------------------------------------ #
+
+    def _get_embeddings(self) -> HuggingFaceEmbeddings:
+        if self._embeddings is not None:
+            return self._embeddings
+        key = (self._embedding_model_name, self._device)
+        emb = self._MODEL_CACHE.get(key)
+        if emb is None:
+            logger.info("Loading embedding model %s on %s (cache miss)", self._embedding_model_name, self._device)
+            emb = HuggingFaceEmbeddings(
+                model_name=self._embedding_model_name,
+                model_kwargs={"device": self._device},
+                encode_kwargs={"normalize_embeddings": True},
+            )
+            self._MODEL_CACHE[key] = emb
+        else:
+            logger.debug("Reusing cached embedding model %s on %s", *key)
+        self._embeddings = emb
+        return emb
 
     def ensure_store(self, force: bool = False) -> PGVector:
         logger.debug(f"ensure_store called for db: {self.db_name}, force={force}")
@@ -78,18 +121,20 @@ class DBEmbedder:
         # Build or attach store (handle version differences in param names)
         store: PGVector
         try:
+            emb_obj = self._get_embeddings()
             store = PGVector(
                 connection_string=self.conn_str,
                 collection_name=self.collection_name,
-                embeddings=self._embeddings,             # new param name
+                embeddings=emb_obj,             # new param name
                 use_jsonb=True,
                 distance_strategy=DistanceStrategy.COSINE,
             )
         except TypeError:
+            emb_obj = self._get_embeddings()
             store = PGVector(
                 connection_string=self.conn_str,
                 collection_name=self.collection_name,
-                embedding_function=self._embeddings,     # older param name
+                embedding_function=emb_obj,     # older param name
                 use_jsonb=True,
                 distance_strategy=DistanceStrategy.COSINE,
             )
@@ -141,16 +186,33 @@ class DBEmbedder:
 
         # Group by (schema, table) to avoid collisions across schemas
         tables: Dict[tuple[str, str], List[str]] = {}
+        table_comments: Dict[tuple[str, str], str] = {}
         for row in metadata:
             schema = (row.get("schema") or "")
             tname = row["table"]
             key = (schema, tname)
-            tables.setdefault(key, []).append(f"{row['column']} ({row['type']})")
+            # Column text with optional comment
+            col_txt = f"{row['column']} ({row['type']})"
+            ccomm = (row.get('column_comment') or '').strip()
+            if ccomm:
+                # Keep comments short-ish to avoid bloating docs
+                col_txt = f"{col_txt} // {ccomm}"
+            tables.setdefault(key, []).append(col_txt)
+            # Capture table-level comment once
+            tcomm = (row.get('table_comment') or '').strip()
+            if tcomm and key not in table_comments:
+                table_comments[key] = tcomm
 
         def _qual_name(schema: str, table: str) -> str:
             return f"{schema}.{table}" if schema else table
 
-        doc_texts = [f"Table {_qual_name(s, t)}: {', '.join(cols)}" for (s, t), cols in tables.items()]
+        doc_texts: List[str] = []
+        for (s, t), cols in tables.items():
+            base = f"Table {_qual_name(s, t)}: {', '.join(cols)}"
+            tcomm = table_comments.get((s, t))
+            if tcomm:
+                base = f"{base} | comment: {tcomm}"
+            doc_texts.append(base)
         # Prefix with e5 passage directive for better alignment
         doc_texts = [f"{_E5_PASSAGE_PREFIX}{txt}" for txt in doc_texts]
         doc_meta = [{"schema": s, "table": t} for (s, t) in tables]
@@ -160,9 +222,10 @@ class DBEmbedder:
 
         # Handle API differences for from_texts
         try:
+            emb_obj = self._get_embeddings()
             store = PGVector.from_texts(
                 texts=doc_texts,
-                embedding=self._embeddings,  # new name
+                embedding=emb_obj,  # new name
                 metadatas=doc_meta,
                 connection_string=self.conn_str,
                 collection_name=self.collection_name,
@@ -170,9 +233,10 @@ class DBEmbedder:
                 distance_strategy=DistanceStrategy.COSINE,
             )
         except TypeError:
+            emb_obj = self._get_embeddings()
             store = PGVector.from_texts(
                 texts=doc_texts,
-                embeddings=self._embeddings,  # alt; bazı sürümlerde bu isim
+                embeddings=emb_obj,  # alt; bazı sürümlerde bu isim
                 metadatas=doc_meta,
                 connection_string=self.conn_str,
                 collection_name=self.collection_name,
@@ -185,7 +249,7 @@ class DBEmbedder:
         self._log_index_status()
         return store
 
-    def similarity_search(self, query: str, k: int = 6) -> List[Dict[str, Any]]:
+    def similarity_search(self, query: str, k: int = 12) -> List[Dict[str, Any]]:
         logger.debug(f"similarity_search called for db: {self.db_name}, query: {query}, k: {k}")
         try:
             store = self.ensure_store()

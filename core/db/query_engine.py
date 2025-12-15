@@ -169,7 +169,11 @@ class QueryEngine:
         # 1) Relevant tables via embeddings (best-effort)
         db_for_run: LoggingSQLDatabase = self.db
         try:
-            hits = self.embedder.similarity_search(nl_query, k=6)
+            if getattr(self.embedder, 'meta_writable', True):
+                hits = self.embedder.similarity_search(nl_query, k=6)
+            else:
+                logger.info("Read-only meta (embed store not writable); skipping embedding-based table restriction.")
+                hits = []
 
             # Log embedding hits for observability
             try:

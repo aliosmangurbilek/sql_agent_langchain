@@ -41,19 +41,26 @@ export function initSchemaStatus(dbUriInput) {
 
   function updateSchemaBanner(status) {
     showSchemaBanner();
+    const readOnly = status.meta_writable === false || status.reason === 'permission_denied_meta_table';
     const needs = !!status.needs_rebuild;
     const reason = status.reason || (needs ? 'pending' : 'ok');
-    schemaBanner.classList.remove('ok','danger');
-    if (!needs) {
+    schemaBanner.classList.remove('ok','danger','readonly');
+    if (readOnly) {
+      schemaBanner.classList.add('readonly');
+      schemaBannerText.textContent = 'Read-only mode: embeddings disabled; agent will scan full schema (may be slower).';
+      // In read-only mode, rebuilding is not possible.
+      rebuildBtn.disabled = true;
+    } else if (!needs) {
       schemaBanner.classList.add('ok');
       schemaBannerText.textContent = `Schema OK (signature ${status.signature_head || '—'})`;
-      rebuildBtn.disabled = true;
+      // Allow user-triggered rebuild even when not strictly required.
+      rebuildBtn.disabled = !dbUriInput.value.trim();
     } else {
       schemaBanner.classList.add('danger');
       schemaBannerText.textContent = reason === 'pending_rebuild_schema_changed'
         ? `Schema changed – rebuild required (stored ${status.signature_head || '—'} vs live ${status.live_signature_head || '—'})`
         : `Rebuild required (reason: ${reason})`;
-      rebuildBtn.disabled = false;
+      rebuildBtn.disabled = !dbUriInput.value.trim();
     }
     checkBtn.disabled = !dbUriInput.value.trim();
   }

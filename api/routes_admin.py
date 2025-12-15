@@ -124,11 +124,12 @@ def embeddings_status():
             eng = sa.create_engine(db_uri, poolclass=NullPool)
         else:
             eng = sa.create_engine(db_uri)
-        emb = DBEmbedder(eng)
-        # İsteğe bağlı: embedder.ensure_store çağırıp _check_schema_change tetikle (force_check=1)
+        # Status poll için embedding modelini yüklemeye gerek yok → preload_embeddings=False
+        emb = DBEmbedder(eng, preload_embeddings=False)
+        # İsteğe bağlı: force_check=1 ise ensure_store tetikle
         if force_check:
             try:
-                emb.ensure_store()  # Lazy check; mark modunda needs_rebuild set edebilir
+                emb.ensure_store()
             except Exception as fc_exc:  # noqa: BLE001
                 logger.warning("force_check ensure_store failed: %s", fc_exc)
         if not eng.url.get_backend_name().startswith("postgres"):
@@ -139,9 +140,57 @@ def embeddings_status():
                 "reason": "Only PostgreSQL (pgvector) supported",
             }), 200
         with eng.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-            _ensure_sig_table(conn)
+            # Try to ensure meta table; if permission denied, fall back to read-only mode
+            try:
+                _ensure_sig_table(conn)
+            except sa.exc.ProgrammingError as pe:  # type: ignore[attr-defined]
+                if 'permission denied' in str(pe).lower():
+                    # Read-only mode: compute live signature and return minimal payload
+                    logger.warning("Meta table creation denied (read-only DB). Falling back to read-only status mode.")
+                    live_sig_ro = None
+                    try:
+                        live_sig_ro = emb._schema_signature()  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                    return jsonify({
+                        "collection": emb.collection_name,
+                        "initialized": False,  # cannot persist state
+                        "needs_rebuild": False,
+                        "meta_writable": False,
+                        "embedding_available": False,
+                        "reason": "permission_denied_meta_table",
+                        "live_signature_head": (live_sig_ro or '')[:8],
+                        "message": "Running in read-only mode: cannot create meta table or embeddings. Table selection will fall back to full schema.",
+                    }), 200
+                raise
             sig_row = _fetch_sig_row(conn, emb.collection_name)
             index_type = _detect_index_type(conn, emb.collection_name)
+            # Quick collection existence + embedding count (best-effort)
+            collection_exists = False
+            embedding_count = 0
+            collection_uuid = None
+            try:
+                row_c = conn.execute(
+                    sa.text("SELECT uuid FROM public.langchain_pg_collection WHERE name = :n"),
+                    {"n": emb.collection_name},
+                ).fetchone()
+                if row_c:
+                    collection_exists = True
+                    collection_uuid = str(row_c[0])
+                    cnt = conn.execute(
+                        sa.text(
+                            """
+                            SELECT COUNT(*)
+                            FROM public.langchain_pg_embedding e
+                            JOIN public.langchain_pg_collection c ON e.collection_id = c.uuid
+                            WHERE c.name = :n
+                            """
+                        ),
+                        {"n": emb.collection_name},
+                    ).scalar()
+                    embedding_count = int(cnt or 0)
+            except Exception as cnt_exc:  # noqa: BLE001
+                logger.debug("Could not compute embedding_count: %s", cnt_exc)
             mode = os.getenv("SCHEMA_CHANGE_MODE", "mark").lower()
             # Canlı şema imzasını yeniden hesapla (kullanıcı buton tetikli kontrol istedi)
             live_sig = None
@@ -186,8 +235,13 @@ def embeddings_status():
                     "initialized": False,
                     "needs_rebuild": True,
                     "index_type": index_type,
+                    "collection_exists": collection_exists,
+                    "collection_uuid": collection_uuid,
+                    "embedding_count": embedding_count,
+                    "embedding_available": bool(collection_exists and embedding_count > 0),
                     "mode": mode,
                     "live_signature_head": (live_sig or "")[:8],
+                    "meta_writable": getattr(emb, 'meta_writable', True),
                 }), 200
             signature = sig_row["signature"] or ""
             stored_sig_head = signature[:8]
@@ -247,10 +301,15 @@ def embeddings_status():
                 "signature_head": stored_sig_head,
                 "updated_at": sig_row["updated_at"],
                 "index_type": index_type,
+                "collection_exists": collection_exists,
+                "collection_uuid": collection_uuid,
+                "embedding_count": embedding_count,
+                "embedding_available": bool(collection_exists and embedding_count > 0),
                 "mode": mode,
                 "live_signature_head": live_sig_head,
                 "diff_detected": diff_detected,
                 "reason": reason,
+                "meta_writable": getattr(emb, 'meta_writable', True),
             }
             if debug:
                 payload["stored_signature_full"] = signature
@@ -290,6 +349,46 @@ def embeddings_status():
         return jsonify({"error": str(e)}), 500
 
 
+@bp.get("/embeddings/search")
+def embeddings_search():
+    """Run a quick similarity search against the schema embeddings.
+
+    Query params:
+      - db_uri: connection string
+      - q: natural language query
+      - k: top-k (default 6)
+    """
+    db_uri = request.args.get("db_uri")
+    q = request.args.get("q") or ""
+    k_raw = request.args.get("k") or "6"
+    try:
+        k = max(1, min(50, int(k_raw)))
+    except Exception:
+        k = 6
+    if not db_uri:
+        return jsonify({"error": "db_uri param required"}), 400
+    try:
+        eng = sa.create_engine(db_uri)
+        emb = DBEmbedder(eng, preload_embeddings=False)
+        # Try without forcing rebuild; if collection empty, indicate in response
+        try:
+            hits = emb.similarity_search(q, k=k) if q else []
+        except Exception as e:  # noqa: BLE001
+            return jsonify({
+                "collection": emb.collection_name,
+                "error": str(e),
+            }), 500
+        return jsonify({
+            "collection": emb.collection_name,
+            "query": q,
+            "k": k,
+            "hits": hits,
+        }), 200
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Embeddings search endpoint failure")
+        return jsonify({"error": str(e)}), 500
+
+
 @bp.post("/embeddings/rebuild")
 def embeddings_rebuild():
     body = request.get_json(silent=True) or {}
@@ -298,7 +397,7 @@ def embeddings_rebuild():
         return jsonify({"error": "'db_uri' required"}), 400
     try:
         eng = sa.create_engine(db_uri)
-        emb = DBEmbedder(eng, force_rebuild=True)  # Rebuild done inside
+        emb = DBEmbedder(eng, force_rebuild=True, preload_embeddings=True)  # Rebuild + preload
         # Update signature table after rebuild
         sig_head = None
         if eng.url.get_backend_name().startswith("postgres"):
@@ -345,7 +444,7 @@ def embeddings_check():
         return jsonify({"error": "'db_uri' required"}), 400
     try:
         eng = sa.create_engine(db_uri)
-        emb = DBEmbedder(eng)
+        emb = DBEmbedder(eng, preload_embeddings=False)
         if not eng.url.get_backend_name().startswith("postgres"):
             return jsonify({"error": "postgres required"}), 400
         live_sig = emb._schema_signature()  # type: ignore[attr-defined]
