@@ -5,12 +5,17 @@ Veritabanı şemasını vektör uzayına gömer ve PGVector (PostgreSQL) ile ara
 
 from __future__ import annotations
 import json, logging
+import os
 from pathlib import Path
 from typing import List, Dict, Any
 import hashlib
 import re
 
 import sqlalchemy as sa
+
+# Avoid transformers pulling optional TF/Flax stacks during import.
+os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
+os.environ.setdefault("TRANSFORMERS_NO_FLAX", "1")
 from langchain_community.vectorstores import PGVector
 from langchain_community.vectorstores.pgvector import DistanceStrategy
 from langchain_huggingface import HuggingFaceEmbeddings

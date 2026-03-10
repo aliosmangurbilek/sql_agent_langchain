@@ -52,6 +52,49 @@ def _hits_to_fqn(hits: List[Dict[str, Any]]) -> tuple[list[str], Set[str]]:
     return fqns, schemas
 
 
+def _extract_final_answer(text: str) -> str:
+    """Best-effort extraction of a Final Answer from a parsing error string."""
+    if not text:
+        return ""
+    matches = list(re.finditer(r"Final Answer:\s*(.*)", text, flags=re.S))
+    if not matches:
+        return ""
+    answer = matches[-1].group(1).strip()
+    # Strip langchain troubleshooting footer if present.
+    answer = re.split(r"For troubleshooting", answer)[0].strip()
+    return answer
+
+
+def _extract_error_text(err: Exception) -> str:
+    """Try to recover raw LLM output from parsing errors, falling back to str(err)."""
+    llm_out = getattr(err, "llm_output", None)
+    if llm_out:
+        return str(llm_out)
+    cause = getattr(err, "__cause__", None)
+    if cause is not None:
+        cause_out = getattr(cause, "llm_output", None)
+        if cause_out:
+            return str(cause_out)
+    return str(err)
+
+
+def _existing_tables(engine: sa.Engine, schema: str | None) -> set[str]:
+    """Return tables + views + materialized views for a schema."""
+    insp = sa.inspect(engine)
+    existing = set(insp.get_table_names(schema=schema))
+    try:
+        existing.update(insp.get_view_names(schema=schema))
+    except Exception:
+        pass
+    get_mat = getattr(insp, "get_materialized_view_names", None)
+    if callable(get_mat):
+        try:
+            existing.update(get_mat(schema=schema))
+        except Exception:
+            pass
+    return existing
+
+
 class LoggingSQLDatabase(SQLDatabase):
     """SQLDatabase genişletmesi; son çalıştırılan sorguyu saklar."""
 
@@ -152,7 +195,11 @@ class QueryEngine:
         self.embedder = DBEmbedder(self.engine)
 
         # Varsayılan DB (tüm şema için, kısıtlama yok)
-        self.db = LoggingSQLDatabase(self.engine, sample_rows_in_table_info=2)
+        self.db = LoggingSQLDatabase(
+            self.engine,
+            sample_rows_in_table_info=2,
+            view_support=True,
+        )
 
     # Kalıcı agent yaratmıyoruz; her çağrıda seçili tablo/şema ile transient agent kuruyoruz.
 
@@ -204,12 +251,22 @@ class QueryEngine:
                     only_schema, tables = next(iter(schema_table_map.items()))
                     log_list = [f"{only_schema+'.' if only_schema else ''}{t}" for t in tables]
                     logger.info("Restricting agent to tables (schema-aware): %s", ", ".join(log_list))
-                    db_for_run = LoggingSQLDatabase(
-                        self.engine,
-                        schema=only_schema,  # None ise varsayılan search_path
-                        include_tables=tables,
-                        sample_rows_in_table_info=2,
-                    )
+                    existing = _existing_tables(self.engine, only_schema)
+                    missing = [t for t in tables if t not in existing]
+                    if missing:
+                        logger.info("Dropping missing tables/views from restriction: %s", ", ".join(missing))
+                        tables = [t for t in tables if t in existing]
+                    if not tables:
+                        logger.info("No matching tables after filtering; using full DB.")
+                        db_for_run = self.db
+                    else:
+                        db_for_run = LoggingSQLDatabase(
+                            self.engine,
+                            schema=only_schema,  # None ise varsayılan search_path
+                            include_tables=tables,
+                            sample_rows_in_table_info=2,
+                            view_support=True,
+                        )
                 else:
                     # Çoklu şema senaryosu: SQLDatabase aynı anda birden fazla şemayı include_tables ile daraltamıyor.
                     # Bu durumda fail-open yerine ileride özel filtre için not bırak.
@@ -231,12 +288,24 @@ class QueryEngine:
             llm=self.llm,
             toolkit=toolkit,
             verbose=True,
-            agent_executor_kwargs={"handle_parsing_errors": True},
+            agent_executor_kwargs={"handle_parsing_errors": False},
         )
 
         # 3) Invoke agent
-        result = agent.invoke({"input": nl_query})
-        answer = result.get("output", "") if isinstance(result, dict) else str(result)
+        answer = ""
+        try:
+            result = agent.invoke({"input": nl_query})
+            raw_output = result.get("output", "") if isinstance(result, dict) else str(result)
+            extracted = _extract_final_answer(raw_output)
+            answer = extracted or raw_output
+        except Exception as e:  # noqa: BLE001
+            err_text = _extract_error_text(e)
+            extracted = _extract_final_answer(err_text)
+            if extracted:
+                logger.warning("Agent output parsing failed; using extracted Final Answer.")
+                answer = extracted
+            else:
+                raise
 
         # 4) Ensure we have SQL + data for downstream charting
         sql_str = getattr(db_for_run, "last_query", "")
