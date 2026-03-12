@@ -30,6 +30,7 @@ from typing import List, Dict, Any
 from flask import Blueprint, jsonify, request
 from werkzeug.exceptions import BadRequest
 
+from config import resolve_db_uri
 from core.db.query_engine import QueryEngine
 from core.charts.spec_generator import generate_chart_spec
 
@@ -56,12 +57,16 @@ def run_chart():
         raise BadRequest("Content-Type must be application/json")
 
     body = request.get_json(silent=True) or {}
-    db_uri = body.get("db_uri")
     question = body.get("question")
     model = body.get("model", "deepseek/deepseek-chat")
 
-    if not db_uri or not question:
-        raise BadRequest("Both 'db_uri' and 'question' fields are required")
+    if not question:
+        raise BadRequest("'question' field is required")
+
+    try:
+        db_uri = resolve_db_uri(body.get("db_uri"), body.get("database"))
+    except ValueError as exc:
+        raise BadRequest(str(exc)) from exc
 
     try:
         sql = body.get("sql")

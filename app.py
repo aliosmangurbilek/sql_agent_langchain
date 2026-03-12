@@ -9,12 +9,14 @@ warnings.filterwarnings('ignore', category=FutureWarning, module='torch')
 warnings.filterwarnings('ignore', category=UserWarning, module='transformers')
 
 from flask import Flask, render_template
+from werkzeug.middleware.proxy_fix import ProxyFix
 from api.routes_query import bp as query_bp
 from api.routes_chart import bp as chart_bp
 from api.routes_health import bp as health_bp
+from api.routes_databases import bp as databases_bp
 from api.routes_models import bp as models_bp
 from api.routes_admin import bp as admin_bp
-from config import AppConfig
+from config import AppConfig, has_default_db_uri
 
 def create_app() -> Flask:
     """Flask application factory"""
@@ -31,17 +33,21 @@ def create_app() -> Flask:
     config = AppConfig()
     app.config.update(config.model_dump())
 
+    if config.TRUST_PROXY_HEADERS:
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
+
     # Register blueprints
     app.register_blueprint(query_bp)
     app.register_blueprint(chart_bp)
     app.register_blueprint(health_bp, url_prefix='/api')
+    app.register_blueprint(databases_bp)
     app.register_blueprint(models_bp)
     app.register_blueprint(admin_bp)
 
     # Main route for the web interface
     @app.route('/')
     def index():
-        return render_template('index.html')
+        return render_template('index.html', has_default_db=has_default_db_uri())
 
     # Error handlers
     @app.errorhandler(404)

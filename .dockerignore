@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+.idea/
+.pytest_cache/
+.venv/
+__pycache__/
+*/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+storage/
+postgres-sample-dbs/
+sql_prpject_overview.odt_1.odt

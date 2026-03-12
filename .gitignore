@@ -46,3 +46,5 @@ __pycache__/app.cpython-312.pyc
 sql_prpject_overview.odt
 Ali Osman Alperen Gurbilek Bitirme 1.docx.md
 .idea/workspace.xml
+__pycache__/
+*/__pycache__/

@@ -44,7 +44,7 @@ class DBEmbedder:
         *,
         db_name: str | None = None,
         collection_prefix: str = "schema_embeddings",
-        embedding_model: str = "intfloat/e5-large-v2",
+        embedding_model: str | None = None,
         force_rebuild: bool = False,
         preload_embeddings: bool = False,  # True ise constructor'da modeli yükler
     ) -> None:
@@ -70,16 +70,20 @@ class DBEmbedder:
             self.meta_writable = False
 
         # Auto-select device for embeddings (GPU if available)
-        _device = "cpu"
-        try:
-            import torch  # type: ignore
-            if torch.cuda.is_available():
-                _device = "cuda"
-        except Exception:
+        requested_device = (os.getenv("EMBEDDING_DEVICE") or "").strip().lower()
+        if requested_device in {"cpu", "cuda", "mps"}:
+            _device = requested_device
+        else:
             _device = "cpu"
+            try:
+                import torch  # type: ignore
+                if torch.cuda.is_available():
+                    _device = "cuda"
+            except Exception:
+                _device = "cpu"
 
         # Lazy load placeholders
-        self._embedding_model_name = embedding_model
+        self._embedding_model_name = embedding_model or os.getenv("EMBEDDING_MODEL", "intfloat/e5-large-v2")
         self._device = _device
         self._embeddings: HuggingFaceEmbeddings | None = None
 

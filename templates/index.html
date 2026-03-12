@@ -9,7 +9,7 @@
     <script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
     <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
 </head>
-<body>
+<body data-has-default-db="{{ 'true' if has_default_db else 'false' }}">
     <div class="container">
         <header>
             <h1>🤖 LangChain SQL Agent</h1>
@@ -27,12 +27,23 @@
             <section class="config-section">
                 <h2>Configuration</h2>
                 <div class="input-group">
-                    <label for="db-uri">Database URI:</label>
+                    <label for="database-select">Database:</label>
                     <div class="input-row">
-                        <input type="text" id="db-uri" placeholder="postgresql://user:pass@localhost:5432/db" value="">
+                        <select id="database-select" disabled>
+                            <option value="">Loading databases...</option>
+                        </select>
                         <button id="test-connection-btn" class="btn btn-test">Test Connection</button>
                     </div>
+                    <p class="form-hint">Choose one of the databases published by the server. Manual URI is optional below.</p>
                 </div>
+                <details id="advanced-db-panel" class="advanced-db-panel">
+                    <summary>Manual Database URI</summary>
+                    <div class="input-group advanced-db-input">
+                        <label for="db-uri">Database URI:</label>
+                        <input type="text" id="db-uri" placeholder="postgresql://user:pass@host:5432/db" value="" autocomplete="off" autocapitalize="off" spellcheck="false">
+                        <p class="form-hint">Optional advanced override. Leave empty to use the dropdown selection.</p>
+                    </div>
+                </details>
                 <div id="test-connection-result" class="connection-status"></div>
                 <div class="input-group">
                     <label for="model-select">Model:</label>
@@ -50,6 +61,13 @@
                 <div class="input-group">
                     <label for="question">Natural Language Query:</label>
                     <textarea id="question" rows="3" placeholder="e.g., Show me the top 10 customers by revenue"></textarea>
+                    <div class="sample-questions-panel">
+                        <div class="sample-questions-header">
+                            <span id="sample-questions-label">Suggested questions</span>
+                            <span class="form-hint">Click one to fill the query box.</span>
+                        </div>
+                        <div id="sample-questions" class="sample-questions-list"></div>
+                    </div>
                 </div>
 
                 <div class="button-group">

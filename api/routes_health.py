@@ -11,6 +11,8 @@ import sqlalchemy as sa
 from sqlalchemy.exc import OperationalError
 import logging
 
+from config import resolve_db_uri
+
 logger = logging.getLogger(__name__)
 bp = Blueprint("health", __name__)
 
@@ -26,10 +28,10 @@ def test_connection():
     """Veritabanı bağlantısını test eder."""
     try:
         data = request.get_json(silent=True) or {}
-        db_uri = data.get('db_uri')
-
-        if not db_uri:
-            return jsonify({'error': "'db_uri' field is required"}), 400
+        try:
+            db_uri = resolve_db_uri(data.get('db_uri'), data.get('database'))
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
 
         # Veritabanı bağlantısını test et
         engine = sa.create_engine(db_uri)

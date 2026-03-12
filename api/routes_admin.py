@@ -14,6 +14,7 @@ import sqlalchemy as sa
 import logging
 import os
 
+from config import resolve_db_uri
 from core.db.embedder import DBEmbedder
 
 logger = logging.getLogger(__name__)
@@ -109,15 +110,25 @@ def _detect_index_type(conn, collection_name: str) -> str:
         return "unknown"
 
 
+def _resolve_request_db_uri(raw_db_uri: str | None, raw_database: str | None = None) -> str:
+    return resolve_db_uri(raw_db_uri, raw_database)
+
+
+def _format_db_operational_error(exc: sa.exc.OperationalError) -> str:
+    detail = str(getattr(exc, "orig", exc)).strip()
+    return f"Database connection failed: {detail}" if detail else "Database connection failed."
+
+
 @bp.get("/embeddings/status")
 def embeddings_status():
-    db_uri = request.args.get("db_uri")
     include_components = request.args.get("components") == "1"
     no_pool = request.args.get("nopool") == "1"
     debug = request.args.get("debug") == "1"
     force_check = request.args.get("force_check") == "1"
-    if not db_uri:
-        return jsonify({"error": "db_uri param required"}), 400
+    try:
+        db_uri = _resolve_request_db_uri(request.args.get("db_uri"), request.args.get("database"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     try:
         if no_pool:
             from sqlalchemy.pool import NullPool  # type: ignore
@@ -344,6 +355,10 @@ def embeddings_status():
                 except Exception as comp_exc:  # noqa: BLE001
                     payload["schema_components_error"] = str(comp_exc)
             return jsonify(payload), 200
+    except sa.exc.OperationalError as exc:
+        message = _format_db_operational_error(exc)
+        logger.warning("Status endpoint database connection failed: %s", message)
+        return jsonify({"error": message}), 503
     except Exception as e:  # noqa: BLE001
         logger.exception("Status endpoint failure")
         return jsonify({"error": str(e)}), 500
@@ -358,15 +373,16 @@ def embeddings_search():
       - q: natural language query
       - k: top-k (default 6)
     """
-    db_uri = request.args.get("db_uri")
     q = request.args.get("q") or ""
     k_raw = request.args.get("k") or "6"
     try:
         k = max(1, min(50, int(k_raw)))
     except Exception:
         k = 6
-    if not db_uri:
-        return jsonify({"error": "db_uri param required"}), 400
+    try:
+        db_uri = _resolve_request_db_uri(request.args.get("db_uri"), request.args.get("database"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     try:
         eng = sa.create_engine(db_uri)
         emb = DBEmbedder(eng, preload_embeddings=False)
@@ -384,6 +400,10 @@ def embeddings_search():
             "k": k,
             "hits": hits,
         }), 200
+    except sa.exc.OperationalError as exc:
+        message = _format_db_operational_error(exc)
+        logger.warning("Embeddings search database connection failed: %s", message)
+        return jsonify({"error": message}), 503
     except Exception as e:  # noqa: BLE001
         logger.exception("Embeddings search endpoint failure")
         return jsonify({"error": str(e)}), 500
@@ -392,9 +412,10 @@ def embeddings_search():
 @bp.post("/embeddings/rebuild")
 def embeddings_rebuild():
     body = request.get_json(silent=True) or {}
-    db_uri = body.get("db_uri")
-    if not db_uri:
-        return jsonify({"error": "'db_uri' required"}), 400
+    try:
+        db_uri = _resolve_request_db_uri(body.get("db_uri"), body.get("database"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     try:
         eng = sa.create_engine(db_uri)
         emb = DBEmbedder(eng, force_rebuild=True, preload_embeddings=True)  # Rebuild + preload
@@ -422,6 +443,10 @@ def embeddings_rebuild():
             except Exception as ie:  # noqa: BLE001
                 logger.warning(f"Could not persist new signature after rebuild: {ie}")
         return jsonify({"status": "ok", "collection": emb.collection_name, "signature_head": sig_head}), 200
+    except sa.exc.OperationalError as exc:
+        message = _format_db_operational_error(exc)
+        logger.warning("Rebuild endpoint database connection failed: %s", message)
+        return jsonify({"status": "failure", "error": message}), 503
     except Exception as e:  # noqa: BLE001
         logger.exception("Rebuild endpoint failure")
         return jsonify({"status": "failure", "error": str(e)}), 500
@@ -439,9 +464,10 @@ def embeddings_check():
       - If different: set needs_rebuild True (do NOT advance signature)
     """
     body = request.get_json(silent=True) or {}
-    db_uri = body.get("db_uri")
-    if not db_uri:
-        return jsonify({"error": "'db_uri' required"}), 400
+    try:
+        db_uri = _resolve_request_db_uri(body.get("db_uri"), body.get("database"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     try:
         eng = sa.create_engine(db_uri)
         emb = DBEmbedder(eng, preload_embeddings=False)
@@ -482,8 +508,10 @@ def embeddings_check():
                 "live_signature_head": live_sig[:8],
             }
             return jsonify(out), 200
+    except sa.exc.OperationalError as exc:
+        message = _format_db_operational_error(exc)
+        logger.warning("Check endpoint database connection failed: %s", message)
+        return jsonify({"error": message}), 503
     except Exception as e:  # noqa: BLE001
         logger.exception("Check endpoint failure")
         return jsonify({"error": str(e)}), 500
-
-

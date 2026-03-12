@@ -1,7 +1,7 @@
 // schema_status.js
 // Handles schema status banner: status fetch, check, rebuild, UI updates.
 
-export function initSchemaStatus(dbUriInput) {
+export function initSchemaStatus({ getTargetPayload, hasResolvableDbTarget, watchElements = [] }) {
   const schemaBanner = document.getElementById('schema-banner');
   const schemaBannerText = document.getElementById('schema-banner-text');
   const checkBtn = document.getElementById('btn-check-schema');
@@ -12,31 +12,71 @@ export function initSchemaStatus(dbUriInput) {
   function hideSchemaBanner() { schemaBanner.classList.add('hidden'); }
   function showSchemaBanner() { schemaBanner.classList.remove('hidden'); }
 
-  async function fetchSchemaStatus(dbUri) {
-    const url = `/api/admin/embeddings/status?db_uri=${encodeURIComponent(dbUri)}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`Status HTTP ${res.status}`);
+  async function getErrorMessage(response, fallback) {
+    try {
+      const payload = await response.json();
+      if (payload?.error) return payload.error;
+      if (payload?.message) return payload.message;
+    } catch (_) {
+      // ignore JSON parse failures and fall back to text.
+    }
+    try {
+      const text = await response.text();
+      if (text) return text;
+    } catch (_) {
+      // ignore body read failures
+    }
+    return fallback;
+  }
+
+  function buildStatusUrl() {
+    const target = getTargetPayload();
+    const params = new URLSearchParams();
+    if (target.db_uri) params.set('db_uri', target.db_uri);
+    else if (target.database) params.set('database', target.database);
+    const query = params.toString();
+    return query ? `/api/admin/embeddings/status?${query}` : '/api/admin/embeddings/status';
+  }
+
+  async function fetchSchemaStatus() {
+    const res = await fetch(buildStatusUrl());
+    if (!res.ok) {
+      throw new Error(await getErrorMessage(res, `Status HTTP ${res.status}`));
+    }
     return res.json();
   }
 
-  async function postCheck(dbUri) {
+  async function postCheck() {
     const res = await fetch('/api/admin/embeddings/check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ db_uri: dbUri })
+      body: JSON.stringify(getTargetPayload())
     });
-    if (!res.ok) throw new Error(`Check HTTP ${res.status}`);
+    if (!res.ok) {
+      throw new Error(await getErrorMessage(res, `Check HTTP ${res.status}`));
+    }
     return res.json();
   }
 
-  async function postRebuild(dbUri) {
+  async function postRebuild() {
     const res = await fetch('/api/admin/embeddings/rebuild', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ db_uri: dbUri })
+      body: JSON.stringify(getTargetPayload())
     });
-    if (!res.ok) throw new Error(`Rebuild HTTP ${res.status}`);
+    if (!res.ok) {
+      throw new Error(await getErrorMessage(res, `Rebuild HTTP ${res.status}`));
+    }
     return res.json();
+  }
+
+  function showSchemaError(message) {
+    showSchemaBanner();
+    schemaBanner.classList.remove('ok', 'readonly');
+    schemaBanner.classList.add('danger');
+    schemaBannerText.textContent = message || 'Schema status unavailable.';
+    checkBtn.disabled = !hasResolvableDbTarget();
+    rebuildBtn.disabled = true;
   }
 
   function updateSchemaBanner(status) {
@@ -54,26 +94,26 @@ export function initSchemaStatus(dbUriInput) {
       schemaBanner.classList.add('ok');
       schemaBannerText.textContent = `Schema OK (signature ${status.signature_head || '—'})`;
       // Allow user-triggered rebuild even when not strictly required.
-      rebuildBtn.disabled = !dbUriInput.value.trim();
+      rebuildBtn.disabled = !hasResolvableDbTarget();
     } else {
       schemaBanner.classList.add('danger');
       schemaBannerText.textContent = reason === 'pending_rebuild_schema_changed'
         ? `Schema changed – rebuild required (stored ${status.signature_head || '—'} vs live ${status.live_signature_head || '—'})`
         : `Rebuild required (reason: ${reason})`;
-      rebuildBtn.disabled = !dbUriInput.value.trim();
+      rebuildBtn.disabled = !hasResolvableDbTarget();
     }
-    checkBtn.disabled = !dbUriInput.value.trim();
+    checkBtn.disabled = !hasResolvableDbTarget();
   }
 
   let pollingTimer = null;
 
   async function refreshSchemaStatus(silent = true) {
-    const dbUri = dbUriInput.value.trim();
-    if (!dbUri) { hideSchemaBanner(); if (pollingTimer) { clearInterval(pollingTimer); pollingTimer=null; } return; }
+    if (!hasResolvableDbTarget()) { hideSchemaBanner(); if (pollingTimer) { clearInterval(pollingTimer); pollingTimer = null; } return; }
     try {
-      const st = await fetchSchemaStatus(dbUri);
+      const st = await fetchSchemaStatus();
       updateSchemaBanner(st);
     } catch (e) {
+      showSchemaError(e?.message || 'Schema status unavailable.');
       if (!silent) console.warn('Schema status error:', e);
     }
   }
@@ -87,31 +127,41 @@ export function initSchemaStatus(dbUriInput) {
   }
 
   checkBtn.addEventListener('click', async () => {
-    const dbUri = dbUriInput.value.trim();
-    if (!dbUri) return;
+    if (!hasResolvableDbTarget()) return;
     checkBtn.disabled = true;
     const original = checkBtn.textContent;
     checkBtn.textContent = 'Checking…';
-    try { await postCheck(dbUri); } catch (e) { console.error(e); }
+    try {
+      await postCheck();
+    } catch (e) {
+      console.error(e);
+      showSchemaError(e?.message || 'Schema check failed.');
+    }
     checkBtn.textContent = original;
     checkBtn.disabled = false;
     refreshSchemaStatus();
   });
 
   rebuildBtn.addEventListener('click', async () => {
-    const dbUri = dbUriInput.value.trim();
-    if (!dbUri) return;
+    if (!hasResolvableDbTarget()) return;
     rebuildBtn.disabled = true;
     const original = rebuildBtn.textContent;
     rebuildBtn.textContent = 'Rebuilding…';
-    try { await postRebuild(dbUri); } catch (e) { console.error(e); }
+    try {
+      await postRebuild();
+    } catch (e) {
+      console.error(e);
+      showSchemaError(e?.message || 'Embedding rebuild failed.');
+    }
     rebuildBtn.textContent = original;
     refreshSchemaStatus();
   });
 
-  dbUriInput.addEventListener('change', () => { refreshSchemaStatus(false); startAutoPolling(); });
+  watchElements.forEach(element => {
+    element?.addEventListener('change', () => { refreshSchemaStatus(false); startAutoPolling(); });
+  });
 
-  if (dbUriInput.value.trim()) { refreshSchemaStatus(false); startAutoPolling(); }
+  if (hasResolvableDbTarget()) { refreshSchemaStatus(false); startAutoPolling(); }
 
   return { refreshSchemaStatus, startAutoPolling };
 }
