@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from sqlalchemy.exc import OperationalError
 import logging
 
-from config import resolve_db_uri
+from config import resolve_db_uri, get_engine_kwargs
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("health", __name__)
@@ -26,6 +26,7 @@ def healthz():
 @bp.route('/test_connection', methods=['POST'])
 def test_connection():
     """Veritabanı bağlantısını test eder."""
+    engine = None
     try:
         data = request.get_json(silent=True) or {}
         try:
@@ -34,7 +35,7 @@ def test_connection():
             return jsonify({'error': str(exc)}), 400
 
         # Veritabanı bağlantısını test et
-        engine = sa.create_engine(db_uri)
+        engine = sa.create_engine(db_uri, **get_engine_kwargs(db_uri))
         with engine.connect() as conn:
             # Basit bir test sorgusu çalıştır
             result = conn.execute(sa.text("SELECT 1"))
@@ -50,3 +51,6 @@ def test_connection():
     except Exception as exc:
         logger.error(f"Unexpected error during connection test: {exc}")
         return jsonify({'status': 'failure', 'error': str(exc)}), 500
+    finally:
+        if engine is not None:
+            engine.dispose()

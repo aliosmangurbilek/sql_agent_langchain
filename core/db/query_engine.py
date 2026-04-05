@@ -21,6 +21,7 @@ from langchain_community.utilities.sql_database import SQLDatabase
 from langchain_community.utilities.sql_database import truncate_word
 from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
+from config import get_engine_kwargs
 from core.db.verify_sql import verify_sql  # SQL guardrail
 from core.db.embedder import DBEmbedder  # Table selection via embeddings
 
@@ -173,7 +174,7 @@ class QueryEngine:
         db_uri: str,
         llm_model: str = "deepseek/deepseek-chat",
     ) -> None:
-        self.engine = sa.create_engine(db_uri)
+        self.engine = sa.create_engine(db_uri, **get_engine_kwargs(db_uri))
 
         # OpenRouter için ChatOpenAI yapılandırması
         openrouter_api_key = os.getenv("OPENROUTER_API_KEY")

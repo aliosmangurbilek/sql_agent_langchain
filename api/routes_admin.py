@@ -14,7 +14,7 @@ import sqlalchemy as sa
 import logging
 import os
 
-from config import resolve_db_uri
+from config import resolve_db_uri, get_engine_kwargs
 from core.db.embedder import DBEmbedder
 
 logger = logging.getLogger(__name__)
@@ -119,6 +119,14 @@ def _format_db_operational_error(exc: sa.exc.OperationalError) -> str:
     return f"Database connection failed: {detail}" if detail else "Database connection failed."
 
 
+def _create_engine(db_uri: str, *, no_pool: bool = False) -> sa.Engine:
+    options = get_engine_kwargs(db_uri)
+    if no_pool:
+        from sqlalchemy.pool import NullPool  # type: ignore
+        options["poolclass"] = NullPool
+    return sa.create_engine(db_uri, **options)
+
+
 @bp.get("/embeddings/status")
 def embeddings_status():
     include_components = request.args.get("components") == "1"
@@ -129,12 +137,9 @@ def embeddings_status():
         db_uri = _resolve_request_db_uri(request.args.get("db_uri"), request.args.get("database"))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+    eng = None
     try:
-        if no_pool:
-            from sqlalchemy.pool import NullPool  # type: ignore
-            eng = sa.create_engine(db_uri, poolclass=NullPool)
-        else:
-            eng = sa.create_engine(db_uri)
+        eng = _create_engine(db_uri, no_pool=no_pool)
         # Status poll için embedding modelini yüklemeye gerek yok → preload_embeddings=False
         emb = DBEmbedder(eng, preload_embeddings=False)
         # İsteğe bağlı: force_check=1 ise ensure_store tetikle
@@ -362,6 +367,9 @@ def embeddings_status():
     except Exception as e:  # noqa: BLE001
         logger.exception("Status endpoint failure")
         return jsonify({"error": str(e)}), 500
+    finally:
+        if eng is not None:
+            eng.dispose()
 
 
 @bp.get("/embeddings/search")
@@ -383,8 +391,9 @@ def embeddings_search():
         db_uri = _resolve_request_db_uri(request.args.get("db_uri"), request.args.get("database"))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+    eng = None
     try:
-        eng = sa.create_engine(db_uri)
+        eng = _create_engine(db_uri)
         emb = DBEmbedder(eng, preload_embeddings=False)
         # Try without forcing rebuild; if collection empty, indicate in response
         try:
@@ -407,6 +416,9 @@ def embeddings_search():
     except Exception as e:  # noqa: BLE001
         logger.exception("Embeddings search endpoint failure")
         return jsonify({"error": str(e)}), 500
+    finally:
+        if eng is not None:
+            eng.dispose()
 
 
 @bp.post("/embeddings/rebuild")
@@ -416,8 +428,9 @@ def embeddings_rebuild():
         db_uri = _resolve_request_db_uri(body.get("db_uri"), body.get("database"))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+    eng = None
     try:
-        eng = sa.create_engine(db_uri)
+        eng = _create_engine(db_uri)
         emb = DBEmbedder(eng, force_rebuild=True, preload_embeddings=True)  # Rebuild + preload
         # Update signature table after rebuild
         sig_head = None
@@ -450,6 +463,9 @@ def embeddings_rebuild():
     except Exception as e:  # noqa: BLE001
         logger.exception("Rebuild endpoint failure")
         return jsonify({"status": "failure", "error": str(e)}), 500
+    finally:
+        if eng is not None:
+            eng.dispose()
 
 
 @bp.post("/embeddings/check")
@@ -468,8 +484,9 @@ def embeddings_check():
         db_uri = _resolve_request_db_uri(body.get("db_uri"), body.get("database"))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+    eng = None
     try:
-        eng = sa.create_engine(db_uri)
+        eng = _create_engine(db_uri)
         emb = DBEmbedder(eng, preload_embeddings=False)
         if not eng.url.get_backend_name().startswith("postgres"):
             return jsonify({"error": "postgres required"}), 400
@@ -515,3 +532,6 @@ def embeddings_check():
     except Exception as e:  # noqa: BLE001
         logger.exception("Check endpoint failure")
         return jsonify({"error": str(e)}), 500
+    finally:
+        if eng is not None:
+            eng.dispose()

@@ -53,6 +53,10 @@ class AppConfig(BaseSettings):
         "sqlite:///langchain_agent.db",
         env="DEFAULT_DB_URI"
     )
+    DB_POOL_SIZE: int = Field(2, env="DB_POOL_SIZE")
+    DB_MAX_OVERFLOW: int = Field(2, env="DB_MAX_OVERFLOW")
+    DB_POOL_TIMEOUT: int = Field(30, env="DB_POOL_TIMEOUT")
+    DB_POOL_RECYCLE: int = Field(1800, env="DB_POOL_RECYCLE")
     DATABASE_OPTIONS: str = Field("", env="DATABASE_OPTIONS")
     SAMPLE_DATABASES: str = Field("", env="SAMPLE_DATABASES")
     TRUST_PROXY_HEADERS: bool = Field(False, env="TRUST_PROXY_HEADERS")
@@ -126,8 +130,10 @@ def _discover_database_names_from_server() -> list[str]:
     if not url.drivername.startswith("postgresql"):
         return []
 
+    engine: sa.Engine | None = None
     try:
-        engine = sa.create_engine(url.render_as_string(hide_password=False), pool_pre_ping=True)
+        rendered = url.render_as_string(hide_password=False)
+        engine = sa.create_engine(rendered, **get_engine_kwargs(rendered))
         with engine.connect() as conn:
             rows = conn.execute(
                 sa.text(
@@ -143,6 +149,9 @@ def _discover_database_names_from_server() -> list[str]:
         return [str(row).strip() for row in rows if str(row).strip()]
     except Exception:
         return []
+    finally:
+        if engine is not None:
+            engine.dispose()
 
 
 def get_default_database_name() -> str | None:
@@ -217,6 +226,27 @@ def resolve_db_uri(db_uri: str | None, database: str | None = None) -> str:
         return default_db_uri
 
     raise ValueError("Database URI not provided and DEFAULT_DB_URI is empty")
+
+
+def get_engine_kwargs(db_uri: str) -> dict:
+    """Return safe SQLAlchemy engine options for the given URI."""
+    options: dict = {"pool_pre_ping": True}
+    try:
+        url = make_url(db_uri)
+    except ArgumentError:
+        return options
+
+    if not url.drivername.startswith("postgresql"):
+        return options
+
+    cfg = get_config()
+    options.update(
+        pool_size=max(1, int(cfg.DB_POOL_SIZE)),
+        max_overflow=max(0, int(cfg.DB_MAX_OVERFLOW)),
+        pool_timeout=max(1, int(cfg.DB_POOL_TIMEOUT)),
+        pool_recycle=max(30, int(cfg.DB_POOL_RECYCLE)),
+    )
+    return options
 
 
 def has_default_db_uri() -> bool:

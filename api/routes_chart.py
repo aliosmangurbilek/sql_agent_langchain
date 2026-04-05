@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 bp = Blueprint("chart", __name__, url_prefix="/api")
 
 
-@lru_cache(maxsize=16)
+@lru_cache(maxsize=4)
 def _get_engine(db_uri: str, llm_model: str = "deepseek/deepseek-chat") -> QueryEngine:
     # Her db_uri ve llm_model kombinasyonu için bir kere QueryEngine oluştur
     # Bu sayede aynı veritabanı için birden fazla kez embedding yapmayız
