@@ -123,6 +123,11 @@ def _create_engine(db_uri: str, *, no_pool: bool = False) -> sa.Engine:
     options = get_engine_kwargs(db_uri)
     if no_pool:
         from sqlalchemy.pool import NullPool  # type: ignore
+        # NullPool does not accept QueuePool-specific kwargs.
+        options.pop("pool_size", None)
+        options.pop("max_overflow", None)
+        options.pop("pool_timeout", None)
+        options.pop("pool_recycle", None)
         options["poolclass"] = NullPool
     return sa.create_engine(db_uri, **options)
 
