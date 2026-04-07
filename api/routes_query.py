@@ -18,26 +18,15 @@ Response:
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from werkzeug.exceptions import BadRequest
 
 from config import resolve_db_uri
-from core.db.query_engine import QueryEngine
+from core.db.engine_registry import get_query_engine
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("query", __name__, url_prefix="/api")
-
-
-@lru_cache(maxsize=4)  # aynı db_uri ve model için QueryEngine nesnesini sakla
-def _get_engine(db_uri: str, llm_model: str = "deepseek/deepseek-chat") -> QueryEngine:
-    # Her db_uri ve llm_model kombinasyonu için bir kere QueryEngine oluştur
-    # Bu sayede aynı veritabanı için birden fazla kez embedding yapmayız
-    
-    # Direkt olarak model ID'sini kullan
-    logger.info(f"Using OpenRouter model: {llm_model}")
-    return QueryEngine(db_uri, llm_model=llm_model)
 
 
 @bp.post("/query")
@@ -48,7 +37,7 @@ def run_query():
 
     body = request.get_json(silent=True) or {}
     question = body.get("question")
-    model = body.get("model", "deepseek/deepseek-chat")  # Default to free DeepSeek model if not specified
+    model = body.get("model") or current_app.config.get("OPENROUTER_MODEL", "deepseek/deepseek-chat")
 
     if not question:
         raise BadRequest("'question' field is required")
@@ -60,7 +49,7 @@ def run_query():
 
     try:
         # Model parametresini de kullan
-        qe = _get_engine(db_uri, llm_model=model)
+        qe = get_query_engine(db_uri, llm_model=model)
         result = qe.ask(question)
         return jsonify(result), 200
     except Exception as exc:  # noqa: BLE001

@@ -130,7 +130,7 @@ def _create_engine(db_uri: str, *, no_pool: bool = False) -> sa.Engine:
 @bp.get("/embeddings/status")
 def embeddings_status():
     include_components = request.args.get("components") == "1"
-    no_pool = request.args.get("nopool") == "1"
+    no_pool = request.args.get("nopool", "1") == "1"
     debug = request.args.get("debug") == "1"
     force_check = request.args.get("force_check") == "1"
     try:

@@ -34,6 +34,8 @@ export function initSchemaStatus({ getTargetPayload, hasResolvableDbTarget, watc
     const params = new URLSearchParams();
     if (target.db_uri) params.set('db_uri', target.db_uri);
     else if (target.database) params.set('database', target.database);
+    // Status endpoint is polled frequently; avoid keeping pooled idle connections.
+    params.set('nopool', '1');
     const query = params.toString();
     return query ? `/api/admin/embeddings/status?${query}` : '/api/admin/embeddings/status';
   }
@@ -106,21 +108,28 @@ export function initSchemaStatus({ getTargetPayload, hasResolvableDbTarget, watc
   }
 
   let pollingTimer = null;
+  let statusRequestInFlight = false;
 
   async function refreshSchemaStatus(silent = true) {
     if (!hasResolvableDbTarget()) { hideSchemaBanner(); if (pollingTimer) { clearInterval(pollingTimer); pollingTimer = null; } return; }
+    if (statusRequestInFlight) return;
+    statusRequestInFlight = true;
     try {
       const st = await fetchSchemaStatus();
       updateSchemaBanner(st);
     } catch (e) {
       showSchemaError(e?.message || 'Schema status unavailable.');
       if (!silent) console.warn('Schema status error:', e);
+    } finally {
+      statusRequestInFlight = false;
     }
   }
 
   function startAutoPolling() {
     if (pollingTimer) clearInterval(pollingTimer);
+    if (document.visibilityState === 'hidden') return;
     pollingTimer = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
       // Lightweight status poll (live signature already computed inside)
       refreshSchemaStatus(true);
     }, 10000); // 10s
@@ -159,6 +168,20 @@ export function initSchemaStatus({ getTargetPayload, hasResolvableDbTarget, watc
 
   watchElements.forEach(element => {
     element?.addEventListener('change', () => { refreshSchemaStatus(false); startAutoPolling(); });
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      if (pollingTimer) {
+        clearInterval(pollingTimer);
+        pollingTimer = null;
+      }
+      return;
+    }
+    if (hasResolvableDbTarget()) {
+      refreshSchemaStatus(true);
+      startAutoPolling();
+    }
   });
 
   if (hasResolvableDbTarget()) { refreshSchemaStatus(false); startAutoPolling(); }

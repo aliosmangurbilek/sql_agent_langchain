@@ -338,3 +338,10 @@ class QueryEngine:
             "sql": sql_str,
             "data": data_rows,
         }
+
+    def close(self) -> None:
+        """Release SQLAlchemy resources held by this engine."""
+        try:
+            self.engine.dispose()
+        except Exception:  # noqa: BLE001
+            pass

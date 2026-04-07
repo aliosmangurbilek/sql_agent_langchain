@@ -24,25 +24,17 @@ Response:
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
 from typing import List, Dict, Any
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from werkzeug.exceptions import BadRequest
 
 from config import resolve_db_uri
-from core.db.query_engine import QueryEngine
+from core.db.engine_registry import get_query_engine
 from core.charts.spec_generator import generate_chart_spec
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("chart", __name__, url_prefix="/api")
-
-
-@lru_cache(maxsize=4)
-def _get_engine(db_uri: str, llm_model: str = "deepseek/deepseek-chat") -> QueryEngine:
-    # Her db_uri ve llm_model kombinasyonu için bir kere QueryEngine oluştur
-    # Bu sayede aynı veritabanı için birden fazla kez embedding yapmayız
-    return QueryEngine(db_uri, llm_model=llm_model)
 
 
 @bp.post("/chart")
@@ -58,7 +50,7 @@ def run_chart():
 
     body = request.get_json(silent=True) or {}
     question = body.get("question")
-    model = body.get("model", "deepseek/deepseek-chat")
+    model = body.get("model") or current_app.config.get("OPENROUTER_MODEL", "deepseek/deepseek-chat")
 
     if not question:
         raise BadRequest("'question' field is required")
@@ -78,7 +70,7 @@ def run_chart():
             result_rows = rows
         else:
             # Gerekirse agent'i bir kez çalıştır
-            qe = _get_engine(db_uri, llm_model=model)
+            qe = get_query_engine(db_uri, llm_model=model)
             result = qe.ask(question)              # {"answer", "sql", "data"}
             result_sql = result.get("sql", "")
             result_rows = result.get("data") or []

@@ -57,6 +57,7 @@ class AppConfig(BaseSettings):
     DB_MAX_OVERFLOW: int = Field(2, env="DB_MAX_OVERFLOW")
     DB_POOL_TIMEOUT: int = Field(30, env="DB_POOL_TIMEOUT")
     DB_POOL_RECYCLE: int = Field(1800, env="DB_POOL_RECYCLE")
+    DB_USE_NULLPOOL: bool = Field(False, env="DB_USE_NULLPOOL")
     DATABASE_OPTIONS: str = Field("", env="DATABASE_OPTIONS")
     SAMPLE_DATABASES: str = Field("", env="SAMPLE_DATABASES")
     TRUST_PROXY_HEADERS: bool = Field(False, env="TRUST_PROXY_HEADERS")
@@ -240,6 +241,11 @@ def get_engine_kwargs(db_uri: str) -> dict:
         return options
 
     cfg = get_config()
+    if cfg.DB_USE_NULLPOOL:
+        from sqlalchemy.pool import NullPool  # type: ignore
+        options["poolclass"] = NullPool
+        return options
+
     options.update(
         pool_size=max(1, int(cfg.DB_POOL_SIZE)),
         max_overflow=max(0, int(cfg.DB_MAX_OVERFLOW)),

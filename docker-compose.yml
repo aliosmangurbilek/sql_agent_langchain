@@ -41,15 +41,17 @@ services:
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-2}
       DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-30}
       DB_POOL_RECYCLE: ${DB_POOL_RECYCLE:-1800}
+      DB_USE_NULLPOOL: ${DB_USE_NULLPOOL:-0}
+      QUERY_ENGINE_CACHE_SIZE: ${QUERY_ENGINE_CACHE_SIZE:-2}
       DEFAULT_DB_URI: postgresql+psycopg2://${POSTGRES_USER:-sqlagent}:${POSTGRES_PASSWORD:-sqlagent}@db:5432/${DEFAULT_SAMPLE_DB:-pagila}
     command:
       - gunicorn
       - --bind
       - 0.0.0.0:5000
       - --workers
-      - ${GUNICORN_WORKERS:-2}
+      - ${GUNICORN_WORKERS:-1}
       - --threads
-      - ${GUNICORN_THREADS:-4}
+      - ${GUNICORN_THREADS:-2}
       - --timeout
       - ${GUNICORN_TIMEOUT:-240}
       - app:create_app()

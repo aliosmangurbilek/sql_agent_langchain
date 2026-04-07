@@ -86,6 +86,7 @@ class DBEmbedder:
         self._embedding_model_name = embedding_model or os.getenv("EMBEDDING_MODEL", "intfloat/e5-large-v2")
         self._device = _device
         self._embeddings: HuggingFaceEmbeddings | None = None
+        self._store: PGVector | None = None
 
         if preload_embeddings:
             try:
@@ -117,6 +118,8 @@ class DBEmbedder:
 
     def ensure_store(self, force: bool = False) -> PGVector:
         logger.debug(f"ensure_store called for db: {self.db_name}, force={force}")
+        if self._store is not None and not force:
+            return self._store
 
         # Best-effort: ensure pgvector extension exists (PostgreSQL only)
         try:
@@ -150,24 +153,29 @@ class DBEmbedder:
 
         if force:
             logger.info("Force rebuild requested for PGVector store: %s", self.collection_name)
-            return self._build_store()
+            self._store = self._build_store()
+            return self._store
 
         # Probe: if empty, build
         try:
             hits = store.similarity_search("__pgvector_healthcheck__", k=1)
             if not hits:
                 logger.info("PGVector collection appears empty; building: %s", self.collection_name)
-                return self._build_store()
+                self._store = self._build_store()
+                return self._store
             # Ensure ANN index exists even if collection was pre-existing
             self._ensure_ann_index()
             self._log_index_status()
-            return store
+            self._store = store
+            return self._store
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Error probing PGVector store, rebuilding: {e}")
-            return self._build_store()
+            self._store = self._build_store()
+            return self._store
 
     def _clear_collection(self) -> None:
         """Clear existing rows for this collection (best-effort)."""
+        self._store = None
         try:
             with self.engine.connect() as conn:
                 conn.execute(sa.text(
@@ -256,6 +264,7 @@ class DBEmbedder:
         self._ensure_ann_index()
         logger.info("PGVector collection built: %s", self.collection_name)
         self._log_index_status()
+        self._store = store
         return store
 
     def similarity_search(self, query: str, k: int = 12) -> List[Dict[str, Any]]:
@@ -302,7 +311,7 @@ class DBEmbedder:
     def rebuild(self) -> None:
         """Koleksiyonu zorla yeniden oluştur."""
         logger.info(f"Rebuilding PGVector collection for {self.db_name}")
-        self._build_store()
+        self._store = self._build_store()
 
     # ------------------------------------------------------------------ #
     # Minimal deterministic schema signature (simplified phase 1)         #
