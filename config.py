@@ -12,7 +12,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import load_dotenv
 import sqlalchemy as sa
 from sqlalchemy.engine import make_url
@@ -28,6 +28,13 @@ _RESERVED_DISCOVERED_DATABASES = {"postgres"}
 
 class AppConfig(BaseSettings):
     """Application configuration using Pydantic v2"""
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
+
     # ---------------------------------------------------------- #
     # Flask / genel
     # ---------------------------------------------------------- #
@@ -58,6 +65,7 @@ class AppConfig(BaseSettings):
     DB_POOL_TIMEOUT: int = Field(30, env="DB_POOL_TIMEOUT")
     DB_POOL_RECYCLE: int = Field(1800, env="DB_POOL_RECYCLE")
     DB_USE_NULLPOOL: bool = Field(False, env="DB_USE_NULLPOOL")
+    QUERY_ENGINE_CACHE_SIZE: int = Field(2, env="QUERY_ENGINE_CACHE_SIZE")
     DATABASE_OPTIONS: str = Field("", env="DATABASE_OPTIONS")
     SAMPLE_DATABASES: str = Field("", env="SAMPLE_DATABASES")
     TRUST_PROXY_HEADERS: bool = Field(False, env="TRUST_PROXY_HEADERS")
@@ -75,12 +83,6 @@ class AppConfig(BaseSettings):
     # ---------------------------------------------------------- #
     CHART_WIDTH: int = Field(800, env="CHART_WIDTH")
     CHART_HEIGHT: int = Field(400, env="CHART_HEIGHT")
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
-
 
 @lru_cache()
 def get_config() -> AppConfig:
