@@ -4,6 +4,7 @@ Veritabanı şemasını vektör uzayına gömer ve PGVector (PostgreSQL) ile ara
 """
 
 from __future__ import annotations
+import inspect
 import json, logging
 import os
 from pathlib import Path
@@ -26,6 +27,20 @@ logger = logging.getLogger(__name__)
 
 _E5_QUERY_PREFIX = "query: "
 _E5_PASSAGE_PREFIX = "passage: "
+
+
+def _embedding_kwarg(factory: Any, embeddings: HuggingFaceEmbeddings) -> Dict[str, Any]:
+    """Return the embedding argument supported by this PGVector API."""
+    try:
+        parameters = inspect.signature(factory).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+
+    if "embeddings" in parameters:
+        return {"embeddings": embeddings}
+    if "embedding" in parameters:
+        return {"embedding": embeddings}
+    return {"embedding_function": embeddings}
 
 
 class DBEmbedder:
@@ -130,26 +145,17 @@ class DBEmbedder:
         except Exception as e:  # noqa: BLE001
             logger.debug(f"Could not ensure pgvector extension: {e}")
 
-        # Build or attach store (handle version differences in param names)
-        store: PGVector
-        try:
-            emb_obj = self._get_embeddings()
-            store = PGVector(
-                connection_string=self.conn_str,
-                collection_name=self.collection_name,
-                embeddings=emb_obj,             # new param name
-                use_jsonb=True,
-                distance_strategy=DistanceStrategy.COSINE,
-            )
-        except TypeError:
-            emb_obj = self._get_embeddings()
-            store = PGVector(
-                connection_string=self.conn_str,
-                collection_name=self.collection_name,
-                embedding_function=emb_obj,     # older param name
-                use_jsonb=True,
-                distance_strategy=DistanceStrategy.COSINE,
-            )
+        # Select the supported keyword before construction. Trying an invalid
+        # keyword leaves legacy PGVector half-initialized and its __del__ then
+        # raises AttributeError because _bind was never assigned.
+        emb_obj = self._get_embeddings()
+        store = PGVector(
+            connection_string=self.conn_str,
+            collection_name=self.collection_name,
+            use_jsonb=True,
+            distance_strategy=DistanceStrategy.COSINE,
+            **_embedding_kwarg(PGVector, emb_obj),
+        )
 
         if force:
             logger.info("Force rebuild requested for PGVector store: %s", self.collection_name)
@@ -237,29 +243,16 @@ class DBEmbedder:
         # Clear existing collection (if any) then (re)create
         self._clear_collection()
 
-        # Handle API differences for from_texts
-        try:
-            emb_obj = self._get_embeddings()
-            store = PGVector.from_texts(
-                texts=doc_texts,
-                embedding=emb_obj,  # new name
-                metadatas=doc_meta,
-                connection_string=self.conn_str,
-                collection_name=self.collection_name,
-                use_jsonb=True,
-                distance_strategy=DistanceStrategy.COSINE,
-            )
-        except TypeError:
-            emb_obj = self._get_embeddings()
-            store = PGVector.from_texts(
-                texts=doc_texts,
-                embeddings=emb_obj,  # alt; bazı sürümlerde bu isim
-                metadatas=doc_meta,
-                connection_string=self.conn_str,
-                collection_name=self.collection_name,
-                use_jsonb=True,
-                distance_strategy=DistanceStrategy.COSINE,
-            )
+        emb_obj = self._get_embeddings()
+        store = PGVector.from_texts(
+            texts=doc_texts,
+            metadatas=doc_meta,
+            connection_string=self.conn_str,
+            collection_name=self.collection_name,
+            use_jsonb=True,
+            distance_strategy=DistanceStrategy.COSINE,
+            **_embedding_kwarg(PGVector.from_texts, emb_obj),
+        )
         # Build ANN index (HNSW preferred; fallback to IVFFlat) best-effort
         self._ensure_ann_index()
         logger.info("PGVector collection built: %s", self.collection_name)

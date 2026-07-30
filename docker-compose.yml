@@ -35,6 +35,10 @@ services:
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-deepseek/deepseek-chat}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/e5-large-v2}
       EMBEDDING_DEVICE: ${EMBEDDING_DEVICE:-cpu}
+      EMBEDDING_RESTRICTION_MIN_TABLES: ${EMBEDDING_RESTRICTION_MIN_TABLES:-30}
+      LANGCHAIN_VERBOSE: ${LANGCHAIN_VERBOSE:-0}
+      SQL_AGENT_TYPE: ${SQL_AGENT_TYPE:-tool-calling}
+      SQL_AGENT_MAX_ITERATIONS: ${SQL_AGENT_MAX_ITERATIONS:-8}
       DATABASE_OPTIONS: ${DATABASE_OPTIONS:-}
       SAMPLE_DATABASES: ${SAMPLE_DATABASES:-pagila,chinook,titanic,netflix,periodic_table,happiness_index}
       DB_POOL_SIZE: ${DB_POOL_SIZE:-2}
@@ -58,6 +62,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
+      - .:/app
       - huggingface_cache:/app/.cache/huggingface
 
 volumes:

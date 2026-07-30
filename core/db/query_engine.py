@@ -79,6 +79,36 @@ def _extract_error_text(err: Exception) -> str:
     return str(err)
 
 
+def _is_output_parsing_error(err: Exception) -> bool:
+    """Return whether an exception chain represents an agent parser failure."""
+    current: BaseException | None = err
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if current.__class__.__name__ == "OutputParserException":
+            return True
+        message = str(current).lower()
+        if "output parsing error" in message or "could not parse llm output" in message:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _is_unhelpful_answer(answer: str) -> bool:
+    normalized = answer.strip().lower().rstrip(".")
+    return (
+        not normalized
+        or normalized.startswith("agent stopped due to")
+        or normalized
+        in {
+            "i don't know",
+            "i do not know",
+            "unable to answer",
+            "cannot answer",
+        }
+    )
+
+
 def _existing_tables(engine: sa.Engine, schema: str | None) -> set[str]:
     """Return tables + views + materialized views for a schema."""
     insp = sa.inspect(engine)
@@ -94,6 +124,44 @@ def _existing_tables(engine: sa.Engine, schema: str | None) -> set[str]:
         except Exception:
             pass
     return existing
+
+
+def _get_fallback_table_info(engine: sa.Engine, schema: str | None) -> str:
+    """Describe base tables without querying sample rows or broken views."""
+    table_names = [
+        name
+        for name in sa.inspect(engine).get_table_names(schema=schema)
+        if not name.startswith("langchain_pg_")
+        and name != DBEmbedder._META_TABLE_NAME
+    ]
+    schema_db = SQLDatabase(
+        engine,
+        schema=schema,
+        include_tables=table_names or None,
+        sample_rows_in_table_info=0,
+        view_support=False,
+    )
+    return schema_db.get_table_info()
+
+
+def _small_schema_base_tables(
+    engine: sa.Engine,
+    schema: str | None,
+) -> list[str] | None:
+    """Return all base tables when the schema is small enough not to restrict."""
+    raw_limit = (os.getenv("EMBEDDING_RESTRICTION_MIN_TABLES") or "30").strip()
+    try:
+        limit = max(0, int(raw_limit))
+    except ValueError:
+        limit = 30
+
+    tables = [
+        name
+        for name in sa.inspect(engine).get_table_names(schema=schema)
+        if not name.startswith("langchain_pg_")
+        and name != DBEmbedder._META_TABLE_NAME
+    ]
+    return tables if tables and len(tables) <= limit else None
 
 
 class LoggingSQLDatabase(SQLDatabase):
@@ -250,24 +318,38 @@ class QueryEngine:
                 if len(schema_table_map) == 1:
                     # Tek şema (veya None): direkt kısıtlı DB oluştur
                     only_schema, tables = next(iter(schema_table_map.items()))
-                    log_list = [f"{only_schema+'.' if only_schema else ''}{t}" for t in tables]
-                    logger.info("Restricting agent to tables (schema-aware): %s", ", ".join(log_list))
-                    existing = _existing_tables(self.engine, only_schema)
-                    missing = [t for t in tables if t not in existing]
-                    if missing:
-                        logger.info("Dropping missing tables/views from restriction: %s", ", ".join(missing))
-                        tables = [t for t in tables if t in existing]
-                    if not tables:
-                        logger.info("No matching tables after filtering; using full DB.")
-                        db_for_run = self.db
-                    else:
+                    base_tables = _small_schema_base_tables(self.engine, only_schema)
+                    if base_tables is not None:
+                        logger.info(
+                            "Small schema detected (%d base tables); skipping embedding restriction.",
+                            len(base_tables),
+                        )
                         db_for_run = LoggingSQLDatabase(
                             self.engine,
-                            schema=only_schema,  # None ise varsayılan search_path
-                            include_tables=tables,
+                            schema=only_schema,
+                            include_tables=base_tables,
                             sample_rows_in_table_info=2,
-                            view_support=True,
+                            view_support=False,
                         )
+                    else:
+                        log_list = [f"{only_schema+'.' if only_schema else ''}{t}" for t in tables]
+                        logger.info("Restricting agent to tables (schema-aware): %s", ", ".join(log_list))
+                        existing = _existing_tables(self.engine, only_schema)
+                        missing = [t for t in tables if t not in existing]
+                        if missing:
+                            logger.info("Dropping missing tables/views from restriction: %s", ", ".join(missing))
+                            tables = [t for t in tables if t in existing]
+                        if not tables:
+                            logger.info("No matching tables after filtering; using full DB.")
+                            db_for_run = self.db
+                        else:
+                            db_for_run = LoggingSQLDatabase(
+                                self.engine,
+                                schema=only_schema,  # None ise varsayılan search_path
+                                include_tables=tables,
+                                sample_rows_in_table_info=2,
+                                view_support=True,
+                            )
                 else:
                     # Çoklu şema senaryosu: SQLDatabase aynı anda birden fazla şemayı include_tables ile daraltamıyor.
                     # Bu durumda fail-open yerine ileride özel filtre için not bırak.
@@ -285,14 +367,25 @@ class QueryEngine:
 
         # 2) Build a transient agent bound to the selected DB
         toolkit = SQLDatabaseToolkit(db=db_for_run, llm=self.llm)
+        try:
+            max_iterations = max(1, int(os.getenv("SQL_AGENT_MAX_ITERATIONS") or "8"))
+        except ValueError:
+            max_iterations = 8
         agent = create_sql_agent(
             llm=self.llm,
             toolkit=toolkit,
-            verbose=True,
+            agent_type=(os.getenv("SQL_AGENT_TYPE") or "tool-calling").strip(),
+            verbose=(os.getenv("LANGCHAIN_VERBOSE") or "").strip().lower()
+            in {"1", "true", "yes", "on"},
+            max_iterations=max_iterations,
             agent_executor_kwargs={"handle_parsing_errors": False},
         )
 
         # 3) Invoke agent
+        # QueryEngine instances are cached, so never let a previous request's
+        # tool output satisfy the fallback checks for this request.
+        db_for_run.last_query = ""
+        db_for_run.last_result = []
         answer = ""
         try:
             result = agent.invoke({"input": nl_query})
@@ -305,6 +398,8 @@ class QueryEngine:
             if extracted:
                 logger.warning("Agent output parsing failed; using extracted Final Answer.")
                 answer = extracted
+            elif _is_output_parsing_error(e):
+                logger.warning("Agent returned an invalid or empty response; using SQL-only fallback.")
             else:
                 raise
 
@@ -312,13 +407,21 @@ class QueryEngine:
         sql_str = getattr(db_for_run, "last_query", "")
         data_rows = getattr(db_for_run, "last_result", [])
 
+        if sql_str and isinstance(data_rows, list) and _is_unhelpful_answer(answer):
+            answer = "Query completed successfully."
+
         if not sql_str or not isinstance(data_rows, list) or len(data_rows) == 0:
             # Fallback: ask LLM to emit only SQL, then verify and execute
             try:
                 logger.info("Agent produced no tool output; attempting SQL-only fallback…")
+                table_info = _get_fallback_table_info(
+                    self.engine,
+                    getattr(db_for_run, "_schema", None),
+                )
                 sql_only_prompt = (
-                    "Return ONLY a valid SQL query that answers the question for this database. "
-                    "Do not include explanations or backticks. Question: " + nl_query
+                    f"Return ONLY one valid {db_for_run.dialect} SQL query that answers "
+                    "the question. Do not include explanations or backticks.\n\n"
+                    f"Database schema:\n{table_info}\n\nQuestion: {nl_query}"
                 )
                 sql_resp = self.llm.invoke(sql_only_prompt)
                 raw_sql = getattr(sql_resp, "content", None) or str(sql_resp)
@@ -328,7 +431,7 @@ class QueryEngine:
                 _ = db_for_run.run(safe_sql, fetch="all")
                 sql_str = getattr(db_for_run, "last_query", str(safe_sql))
                 data_rows = getattr(db_for_run, "last_result", [])
-                if not answer:
+                if _is_unhelpful_answer(answer):
                     answer = "Executed fallback SQL."
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"SQL-only fallback failed: {e}")
